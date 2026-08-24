@@ -34,8 +34,14 @@ ChatGPT / Claude Code / Gemini 等模型有时会在输出中偷偷插入或替�
     * diff 高亮: 输入框中被替换的字符飘红, 输出框中还原后的字符飘绿
     * 输入/输出框滚动位置同步, 方便对照观察
     * 窗口缩放时两个文本框等高自适应, 按钮始终可见
+    * 选中联动(IDE diff 效果): 鼠标框选任一边的内容, 另一边的对应区域
+      同步高亮(浅蓝色), 且拖拽选中时的自动滚动也会同步
+    * 深色主题: 右下角按钮一键切换, 偏好自动保存
 """
 
+import os
+import json
+import bisect
 import tkinter as tk
 from tkinter import ttk
 import unicodedata
@@ -222,9 +228,14 @@ def _merge_ranges(ranges):
 def convert_text(text, enabled):
     """按启用选项转换文本。
 
-    返回 (结果字符串, {分类: 替换数量}, 输入中被替换的区间, 输出中还原结果的区间)。
+    返回 (结果字符串, {分类: 替换数量}, 输入中被替换的区间, 输出中还原结果的区间,
+          映射信息)。
     区间为 [(起始下标, 结束下标), ...] 形式, 已合并相邻区间, 用于 diff 高亮。
     末尾的换行符(\n / \r)会被删除, 并在输入区间中标注出来。
+    映射信息用于选中区域联动:
+        'in_to_out_start': 每个输入字符对应的输出起点(含末尾哨兵)
+        'out_to_in'       : 每个输出字符对应的输入下标
+        'cut'             : 参与转换的输入长度(末尾换行被排除)
     """
     order = [k for k in MAPPINGS if enabled.get(k, True)]
     counts = {k: 0 for k in order}
@@ -242,7 +253,10 @@ def convert_text(text, enabled):
 
     out = []
     out_pos = 0
+    in_to_out_start = []   # 每个输入字符对应的输出起点
+    out_to_in = []         # 每个输出字符对应的输入下标
     for in_pos in range(cut):
+        in_to_out_start.append(out_pos)
         ch = text[in_pos]
         new = ch
         changed = False
@@ -258,7 +272,96 @@ def convert_text(text, enabled):
                 green.append((out_pos, out_pos + len(new)))
         out.append(new)
         out_pos += len(new)
-    return ''.join(out), counts, _merge_ranges(red), _merge_ranges(green)
+        for _ in new:
+            out_to_in.append(in_pos)
+    in_to_out_start.append(out_pos)   # 哨兵: 输入末尾之后
+    return ''.join(out), counts, _merge_ranges(red), _merge_ranges(green), {
+        'in_to_out_start': in_to_out_start,
+        'out_to_in': out_to_in,
+        'cut': cut,
+    }
+
+
+def _line_starts(s):
+    """返回每行在字符串中的起始偏移(第 1 行从 0 开始)。"""
+    starts = [0]
+    for i, ch in enumerate(s):
+        if ch == '\n':
+            starts.append(i + 1)
+    return starts
+
+
+def _idx_to_offset(index, line_starts):
+    """Tk 文本索引 'line.col' -> 字符偏移。"""
+    line, col = (int(x) for x in index.split('.'))
+    return line_starts[line - 1] + col
+
+
+def _offset_to_index(offset, line_starts, total_len):
+    """字符偏移 -> Tk 文本索引 'line.col'。"""
+    offset = max(0, min(offset, total_len))
+    li = bisect.bisect_right(line_starts, offset) - 1
+    return f'{li + 1}.{offset - line_starts[li]}'
+
+
+# ---------------- 主题配色 ----------------
+
+THEMES = {
+    'light': {
+        'ttk_theme': 'vista',
+        'root_bg': '#f0f0f0',
+        'text_bg': '#ffffff',
+        'text_fg': '#000000',
+        'sel_bg': '#c9e2ff',      # 浅蓝选中色
+        'sel_fg': None,
+        'mirror_bg': '#dcebff',   # 另一边联动高亮 (更浅的蓝)
+        'mirror_fg': None,
+        'red_fg': '#c0392b', 'red_bg': '#fdecea',
+        'green_fg': '#1e8449', 'green_bg': '#eafaf1',
+        'status_fg': '#1a6fb0',
+        'hint_fg': '#667777',
+    },
+    'dark': {
+        'ttk_theme': 'clam',
+        'root_bg': '#1e1e1e',
+        'text_bg': '#1e1e1e',
+        'text_fg': '#d4d4d4',
+        'sel_bg': '#c9e2ff',
+        'sel_fg': '#000000',
+        'mirror_bg': '#a9c8ec',
+        'mirror_fg': '#000000',
+        'red_fg': '#ff8a80', 'red_bg': '#4a2323',
+        'green_fg': '#7ee787', 'green_bg': '#1f3d2b',
+        'status_fg': '#79b8ff',
+        'hint_fg': '#9d9d9d',
+    },
+}
+
+
+def _config_path():
+    base = os.environ.get('APPDATA') or os.path.expanduser('~')
+    d = os.path.join(base, 'TextRestore')
+    try:
+        os.makedirs(d, exist_ok=True)
+    except OSError:
+        pass
+    return os.path.join(d, 'config.json')
+
+
+def _load_config():
+    try:
+        with open(_config_path(), 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def _save_config(cfg):
+    try:
+        with open(_config_path(), 'w', encoding='utf-8') as f:
+            json.dump(cfg, f, ensure_ascii=False)
+    except OSError:
+        pass
 
 
 class App:
@@ -267,14 +370,16 @@ class App:
         root.title(APP_TITLE)
         root.geometry('820x680')
         root.minsize(640, 320)
-        try:
-            ttk.Style().configure('.', font=UI_FONT)
-        except tk.TclError:
-            pass
         self.enabled = {k: tk.BooleanVar(value=True) for k in OPTION_ORDER}
         self._status_after = None
-        self._syncing = False   # 防止同步滚动互相触发
+        self._syncing = False
+        self._map = None          # 最近一次转换的映射信息
+        self._last_result = ''
+        self._in_line_starts = [0]
+        self._out_line_starts = [0]
+        self.dark = bool(_load_config().get('dark', False))
         self._build_ui()
+        self.apply_theme(self.dark)
         self.input_text.focus_set()
         self.do_convert()
 
@@ -286,15 +391,18 @@ class App:
         main.columnconfigure(0, weight=1)
 
         # ---- 顶部提示 + 图例 ----
-        ttk.Label(main, text=APP_HINT, foreground='#667',
-                  wraplength=760).grid(row=0, column=0, sticky='w')
+        self.hint_label = ttk.Label(main, text=APP_HINT, foreground='#667',
+                                    wraplength=760)
+        self.hint_label.grid(row=0, column=0, sticky='w')
         legend = ttk.Frame(main)
         legend.grid(row=1, column=0, sticky='w', pady=(2, 0))
-        ttk.Label(legend, text='■ 输入中被替换的字符',
-                  foreground='#c0392b').pack(side='left')
+        self.legend_red = ttk.Label(legend, text='■ 输入中被替换的字符',
+                                    foreground='#c0392b')
+        self.legend_red.pack(side='left')
         ttk.Label(legend, text='   ', foreground='#667').pack(side='left')
-        ttk.Label(legend, text='■ 输出中还原后的字符',
-                  foreground='#1e8449').pack(side='left')
+        self.legend_green = ttk.Label(legend, text='■ 输出中还原后的字符',
+                                      foreground='#1e8449')
+        self.legend_green.pack(side='left')
 
         # ---- 输入区 ----
         ttk.Label(main, text='输入(自动转换):').grid(row=2, column=0,
@@ -344,14 +452,17 @@ class App:
         # 输出框: 只读, 但允许鼠标选中, Ctrl+C 复制选中, Ctrl+A 全选
         self.output_text.bind('<Key>', self._readonly_block)
 
-        # ---- 底部: 复制按钮 + 状态栏 ----
+        # ---- 底部: 复制按钮 + 主题切换 + 状态栏 ----
         bottom = ttk.Frame(main)
         bottom.grid(row=7, column=0, sticky='ew', pady=(10, 0))
         ttk.Button(bottom, text='复制结果', command=self.copy_result).pack(side='left')
         ttk.Button(bottom, text='清空输入', command=self.clear_input).pack(side='left', padx=8)
         self.status_var = tk.StringVar(value='就绪。')
-        ttk.Label(bottom, textvariable=self.status_var,
-                  foreground='#1a6fb0').pack(side='right')
+        self.status_label = ttk.Label(bottom, textvariable=self.status_var,
+                                      foreground='#1a6fb0')
+        self.status_label.pack(side='right')
+        self.theme_btn = ttk.Button(bottom, text='深色主题', command=self.toggle_theme)
+        self.theme_btn.pack(side='right', padx=(0, 8))
 
         # 输入内容变化时自动转换
         self.input_text.bind('<KeyRelease>', self._on_change)
@@ -362,6 +473,13 @@ class App:
             w.bind('<MouseWheel>', self._wheel_both)   # Windows / macOS
             w.bind('<Button-4>', self._wheel_both)     # Linux 上滚
             w.bind('<Button-5>', self._wheel_both)     # Linux 下滚
+
+        # 选中联动 (IDE diff 效果) + 拖拽自动滚动同步
+        for w in (self.input_text, self.output_text):
+            w.bind('<<Selection>>', self._on_selection)
+            w.bind('<B1-Motion>', self._on_drag)
+            w.bind('<ButtonRelease-1>', self._on_selection)
+        self.input_text.bind('<Control-a>', self._select_all_in)
 
     # ---------- 同步滚动 ----------
     def _scroll_both(self, *args):
@@ -404,6 +522,160 @@ class App:
         finally:
             self._syncing = False
 
+    # ---------- 主题 ----------
+    def toggle_theme(self):
+        self.dark = not self.dark
+        self.apply_theme(self.dark)
+        _save_config({'dark': self.dark})
+
+    def apply_theme(self, dark):
+        theme = THEMES['dark' if dark else 'light']
+        style = ttk.Style()
+        try:
+            style.theme_use(theme['ttk_theme'])
+        except tk.TclError:
+            pass
+        style.configure('.', font=UI_FONT)
+        if dark:
+            style.configure('.', background=theme['root_bg'],
+                            foreground=theme['text_fg'],
+                            fieldbackground=theme['text_bg'],
+                            bordercolor='#3c3c3c',
+                            lightcolor='#3c3c3c', darkcolor='#3c3c3c')
+            style.configure('TFrame', background=theme['root_bg'])
+            style.configure('TLabel', background=theme['root_bg'],
+                            foreground=theme['text_fg'])
+            style.configure('TLabelframe', background=theme['root_bg'],
+                            foreground=theme['text_fg'],
+                            bordercolor='#3c3c3c',
+                            lightcolor='#3c3c3c', darkcolor='#3c3c3c')
+            style.configure('TLabelframe.Label', background=theme['root_bg'],
+                            foreground=theme['text_fg'])
+            style.configure('TButton', background='#333333',
+                            foreground=theme['text_fg'],
+                            bordercolor='#3c3c3c', relief='flat')
+            style.map('TButton',
+                      background=[('active', '#454545'), ('pressed', '#2a2a2a')])
+            style.configure('TCheckbutton', background=theme['root_bg'],
+                            foreground=theme['text_fg'])
+            style.map('TCheckbutton', background=[('active', theme['root_bg'])])
+            style.configure('TScrollbar', background='#3c3c3c',
+                            troughcolor=theme['root_bg'],
+                            arrowcolor=theme['text_fg'],
+                            bordercolor=theme['root_bg'])
+            style.map('TScrollbar', background=[('active', '#4a4a4a')])
+        self.root.configure(bg=theme['root_bg'])
+        for w in (self.input_text, self.output_text):
+            w.configure(bg=theme['text_bg'], fg=theme['text_fg'],
+                        insertbackground=theme['text_fg'],
+                        highlightbackground=theme['root_bg'],
+                        highlightthickness=1)
+            if theme['sel_fg']:
+                w.tag_configure('sel', background=theme['sel_bg'],
+                                foreground=theme['sel_fg'])
+            else:
+                w.tag_configure('sel', background=theme['sel_bg'])
+            if theme['mirror_fg']:
+                w.tag_configure('mirror', background=theme['mirror_bg'],
+                                foreground=theme['mirror_fg'])
+            else:
+                w.tag_configure('mirror', background=theme['mirror_bg'])
+            w.tag_raise('mirror')   # 保证联动高亮盖过 diff 标记
+        self.input_text.tag_configure('red', foreground=theme['red_fg'],
+                                      background=theme['red_bg'])
+        self.output_text.tag_configure('green', foreground=theme['green_fg'],
+                                       background=theme['green_bg'])
+        self.legend_red.configure(foreground=theme['red_fg'])
+        self.legend_green.configure(foreground=theme['green_fg'])
+        self.status_label.configure(foreground=theme['status_fg'])
+        self.hint_label.configure(foreground=theme['hint_fg'])
+        self.theme_btn.configure(text='浅色主题' if dark else '深色主题')
+
+    # ---------- 选中联动 (IDE diff 效果) ----------
+    def _on_selection(self, event=None):
+        src = getattr(event, 'widget', event) if event is not None else self.input_text
+        self._mirror_selection(src)
+        self.root.after_idle(self._follow_view, src)
+
+    def _on_drag(self, event):
+        # 鼠标拖拽选中的自动滚动: 让另一个文本框跟随
+        src = getattr(event, 'widget', event)
+        self.root.after_idle(self._follow_view, src)
+
+    def _follow_view(self, src):
+        if self._syncing or src is None:
+            return
+        self._syncing = True
+        try:
+            other = self.output_text if src is self.input_text else self.input_text
+            other.yview_moveto(src.yview()[0])
+        finally:
+            self._syncing = False
+
+    def _mirror_selection(self, src):
+        other = self.output_text if src is self.input_text else self.input_text
+        other.tag_remove('mirror', '1.0', 'end')
+        if self._map is None:
+            return
+        try:
+            s = src.index('sel.first')
+            e = src.index('sel.last')
+        except tk.TclError:
+            return
+        if src is self.input_text:
+            rng = self._map_input_range(s, e)
+        else:
+            rng = self._map_output_range(s, e)
+        if rng:
+            other.tag_add('mirror', rng[0], rng[1])
+
+    def _map_input_range(self, s_idx, e_idx):
+        """输入框选区 -> 输出框对应区间 (返回 Tk 索引或 None)。"""
+        m = self._map
+        s = _idx_to_offset(s_idx, self._in_line_starts)
+        e = _idx_to_offset(e_idx, self._in_line_starts)
+        if s >= m['cut']:
+            return None
+        e = min(e, m['cut'])
+        os_ = m['in_to_out_start'][s]
+        oe = m['in_to_out_start'][e]
+        if os_ == oe:
+            return None
+        return (_offset_to_index(os_, self._out_line_starts, len(self._last_result)),
+                _offset_to_index(oe, self._out_line_starts, len(self._last_result)))
+
+    def _map_output_range(self, s_idx, e_idx):
+        """输出框选区 -> 输入框对应区间 (返回 Tk 索引或 None)。"""
+        m = self._map
+        if not m['out_to_in']:
+            return None
+        s = _idx_to_offset(s_idx, self._out_line_starts)
+        e = _idx_to_offset(e_idx, self._out_line_starts)
+        total = len(m['out_to_in'])
+        s = min(s, total - 1)
+        e = min(e, total)
+        if s >= e:
+            return None
+        ins = m['out_to_in'][s]
+        ine = m['out_to_in'][e - 1] + 1
+        return (_offset_to_index(ins, self._in_line_starts, m['cut']),
+                _offset_to_index(ine, self._in_line_starts, m['cut']))
+
+    def _refresh_mirror(self):
+        """转换后若仍有选区, 重新生成联动高亮。"""
+        for src in (self.input_text, self.output_text):
+            try:
+                src.index('sel.first')
+            except tk.TclError:
+                continue
+            self._mirror_selection(src)
+            break
+
+    def _select_all_in(self, event=None):
+        self.input_text.tag_add('sel', '1.0', 'end-1c')
+        self._mirror_selection(self.input_text)
+        return 'break'
+
     # ---------- 事件处理 ----------
     def _on_change(self, event=None):
         self.do_convert()
@@ -411,7 +683,11 @@ class App:
     def do_convert(self):
         raw = self.input_text.get('1.0', 'end-1c')
         enabled = {k: v.get() for k, v in self.enabled.items()}
-        result, counts, red, green = convert_text(raw, enabled)
+        result, counts, red, green, mapping = convert_text(raw, enabled)
+        self._map = mapping
+        self._last_result = result
+        self._in_line_starts = _line_starts(raw)
+        self._out_line_starts = _line_starts(result)
         self.output_text.delete('1.0', 'end')
         self.output_text.insert('1.0', result)
         # diff 高亮: 输入框飘红, 输出框飘绿
@@ -430,6 +706,10 @@ class App:
             self.status_var.set('未发现需要还原的字符。')
         # 输出内容刷新后, 滚动位置对齐到输入框 (键盘翻页等场景)
         self.root.after_idle(self._sync_output_view)
+        # 若存在选区, 重新生成联动高亮
+        self.output_text.tag_remove('mirror', '1.0', 'end')
+        self.input_text.tag_remove('mirror', '1.0', 'end')
+        self.root.after_idle(self._refresh_mirror)
 
     def copy_result(self):
         content = self.output_text.get('1.0', 'end-1c')
@@ -474,6 +754,8 @@ class App:
 
     def _select_all(self):
         self.output_text.tag_add('sel', '1.0', 'end-1c')
+        self._mirror_selection(self.output_text)
+        self._follow_view(self.output_text)
 
 
 def main():
