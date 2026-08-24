@@ -28,6 +28,12 @@ ChatGPT / Claude Code / Gemini 等模型有时会在输出中偷偷插入或替�
     5. 相似字母        : С(西里尔) ᴀ(小型大写) Ⱥ -> C A A
     6. 删除不可见字符  : 零宽空格/连接符/BOM/双向控制符等
     7. 特殊空格归一    : 不间断空格/窄空格 -> 普通空格
+    8. 删除末尾换行    : 输入末尾多余的 \n / \r 不会出现在输出中
+
+其他特性:
+    * diff 高亮: 输入框中被替换的字符飘红, 输出框中还原后的字符飘绿
+    * 输入/输出框滚动位置同步, 方便对照观察
+    * 窗口缩放时两个文本框等高自适应, 按钮始终可见
 """
 
 import tkinter as tk
@@ -180,6 +186,7 @@ CHECK_LABELS = {
     'homoglyph': '相似字母',
     'invisible': '不可见字符',
     'space': '特殊空格',
+    'trailing': '删除末尾换行',
 }
 
 STATUS_NAMES = {
@@ -190,13 +197,18 @@ STATUS_NAMES = {
     'homoglyph': '相似',
     'invisible': '不可见',
     'space': '空格',
+    'trailing': '末尾换行',
 }
+
+# 界面上的选项顺序 (trailing 在 convert_text 中单独处理, 不在 MAPPINGS 里)
+OPTION_ORDER = list(MAPPINGS) + ['trailing']
 
 
 def _merge_ranges(ranges):
-    """把相邻的区间合并, 减少 Tk 标注次数。"""
+    """把区间排序并合并相邻区间, 减少 Tk 标注次数。"""
     if not ranges:
         return []
+    ranges = sorted(ranges)
     merged = [list(ranges[0])]
     for s, e in ranges[1:]:
         if s <= merged[-1][1]:
@@ -212,14 +224,26 @@ def convert_text(text, enabled):
 
     返回 (结果字符串, {分类: 替换数量}, 输入中被替换的区间, 输出中还原结果的区间)。
     区间为 [(起始下标, 结束下标), ...] 形式, 已合并相邻区间, 用于 diff 高亮。
+    末尾的换行符(\n / \r)会被删除, 并在输入区间中标注出来。
     """
     order = [k for k in MAPPINGS if enabled.get(k, True)]
     counts = {k: 0 for k in order}
     red = []     # 输入中发生替换的区间
     green = []   # 输出中替换结果的区间
+
+    # 末尾换行处理: 删除末尾所有 \n / \r, 在输入中标注
+    cut = len(text)
+    if enabled.get('trailing', True):
+        while cut > 0 and text[cut - 1] in '\r\n':
+            cut -= 1
+        if cut < len(text):
+            counts['trailing'] = len(text) - cut
+            red.append((cut, len(text)))
+
     out = []
     out_pos = 0
-    for in_pos, ch in enumerate(text):
+    for in_pos in range(cut):
+        ch = text[in_pos]
         new = ch
         changed = False
         for k in order:
@@ -241,26 +265,31 @@ class App:
     def __init__(self, root):
         self.root = root
         root.title(APP_TITLE)
-        root.geometry('800x680')
-        root.minsize(660, 540)
+        root.geometry('820x680')
+        root.minsize(640, 320)
         try:
             ttk.Style().configure('.', font=UI_FONT)
         except tk.TclError:
             pass
-        self.enabled = {k: tk.BooleanVar(value=True) for k in MAPPINGS}
+        self.enabled = {k: tk.BooleanVar(value=True) for k in OPTION_ORDER}
         self._status_after = None
+        self._syncing = False   # 防止同步滚动互相触发
         self._build_ui()
         self.input_text.focus_set()
         self.do_convert()
 
     def _build_ui(self):
         main = ttk.Frame(self.root, padding=10)
-        main.pack(fill='both', expand=True)
+        main.grid(row=0, column=0, sticky='nsew')
+        self.root.rowconfigure(0, weight=1)
+        self.root.columnconfigure(0, weight=1)
+        main.columnconfigure(0, weight=1)
 
+        # ---- 顶部提示 + 图例 ----
         ttk.Label(main, text=APP_HINT, foreground='#667',
-                  wraplength=740).pack(anchor='w')
+                  wraplength=760).grid(row=0, column=0, sticky='w')
         legend = ttk.Frame(main)
-        legend.pack(anchor='w', pady=(2, 0))
+        legend.grid(row=1, column=0, sticky='w', pady=(2, 0))
         ttk.Label(legend, text='■ 输入中被替换的字符',
                   foreground='#c0392b').pack(side='left')
         ttk.Label(legend, text='   ', foreground='#667').pack(side='left')
@@ -268,36 +297,43 @@ class App:
                   foreground='#1e8449').pack(side='left')
 
         # ---- 输入区 ----
-        ttk.Label(main, text='输入(自动转换):').pack(anchor='w', pady=(8, 2))
+        ttk.Label(main, text='输入(自动转换):').grid(row=2, column=0,
+                                                    sticky='w', pady=(8, 2))
         in_frame = ttk.Frame(main)
-        in_frame.pack(fill='both', expand=True)
-        self.input_text = tk.Text(in_frame, height=10, font=TEXT_FONT,
+        in_frame.grid(row=3, column=0, sticky='nsew')
+        self.input_text = tk.Text(in_frame, height=8, font=TEXT_FONT,
                                   wrap='word', undo=True)
-        in_scroll = ttk.Scrollbar(in_frame, command=self.input_text.yview)
-        self.input_text.configure(yscrollcommand=in_scroll.set)
+        self.in_scroll = ttk.Scrollbar(in_frame, command=self._scroll_both)
+        self.input_text.configure(yscrollcommand=self.in_scroll.set)
         self.input_text.pack(side='left', fill='both', expand=True)
-        in_scroll.pack(side='right', fill='y')
+        self.in_scroll.pack(side='right', fill='y')
 
-        # ---- 还原选项 ----
+        # ---- 还原选项 (两行 x 4列, 窄窗口下也不裁剪) ----
         opt_frame = ttk.LabelFrame(main, text='还原选项', padding=8)
-        opt_frame.pack(fill='x', pady=(10, 8))
-        for i, key in enumerate(MAPPINGS):
+        opt_frame.grid(row=4, column=0, sticky='ew', pady=(10, 8))
+        for i, key in enumerate(OPTION_ORDER):
             ttk.Checkbutton(opt_frame, text=CHECK_LABELS[key],
                             variable=self.enabled[key],
-                            command=self.do_convert).grid(row=0, column=i,
-                                                          padx=10, sticky='w')
-        opt_frame.columnconfigure(len(MAPPINGS), weight=1)
+                            command=self.do_convert).grid(row=i // 4, column=i % 4,
+                                                          padx=9, pady=2, sticky='w')
+        for col in range(4):
+            opt_frame.columnconfigure(col, weight=1)
 
         # ---- 输出区 ----
-        ttk.Label(main, text='输出(转换结果):').pack(anchor='w', pady=(0, 2))
+        ttk.Label(main, text='输出(转换结果):').grid(row=5, column=0,
+                                                    sticky='w', pady=(0, 2))
         out_frame = ttk.Frame(main)
-        out_frame.pack(fill='both', expand=True)
-        self.output_text = tk.Text(out_frame, height=10, font=TEXT_FONT,
+        out_frame.grid(row=6, column=0, sticky='nsew')
+        self.output_text = tk.Text(out_frame, height=8, font=TEXT_FONT,
                                    wrap='word')
-        out_scroll = ttk.Scrollbar(out_frame, command=self.output_text.yview)
-        self.output_text.configure(yscrollcommand=out_scroll.set)
+        self.out_scroll = ttk.Scrollbar(out_frame, command=self._scroll_both)
+        self.output_text.configure(yscrollcommand=self.out_scroll.set)
         self.output_text.pack(side='left', fill='both', expand=True)
-        out_scroll.pack(side='right', fill='y')
+        self.out_scroll.pack(side='right', fill='y')
+
+        # 两个文本框等高、均匀分配空间, 缩放行为一致
+        main.rowconfigure(3, weight=1, uniform='texts')
+        main.rowconfigure(6, weight=1, uniform='texts')
 
         # diff 高亮配色: 输入框替换字符飘红, 输出框还原字符飘绿
         self.input_text.tag_configure('red', foreground='#c0392b',
@@ -310,7 +346,7 @@ class App:
 
         # ---- 底部: 复制按钮 + 状态栏 ----
         bottom = ttk.Frame(main)
-        bottom.pack(fill='x', pady=(10, 0))
+        bottom.grid(row=7, column=0, sticky='ew', pady=(10, 0))
         ttk.Button(bottom, text='复制结果', command=self.copy_result).pack(side='left')
         ttk.Button(bottom, text='清空输入', command=self.clear_input).pack(side='left', padx=8)
         self.status_var = tk.StringVar(value='就绪。')
@@ -320,6 +356,53 @@ class App:
         # 输入内容变化时自动转换
         self.input_text.bind('<KeyRelease>', self._on_change)
         self.input_text.bind('<<Paste>>', self._on_change)
+
+        # 同步滚动: 滚轮作用于两个文本框
+        for w in (self.input_text, self.output_text):
+            w.bind('<MouseWheel>', self._wheel_both)   # Windows / macOS
+            w.bind('<Button-4>', self._wheel_both)     # Linux 上滚
+            w.bind('<Button-5>', self._wheel_both)     # Linux 下滚
+
+    # ---------- 同步滚动 ----------
+    def _scroll_both(self, *args):
+        """滚动条拖动时, 两个文本框一起滚动。"""
+        if self._syncing:
+            return
+        self._syncing = True
+        try:
+            self.input_text.yview(*args)
+            self.output_text.yview(*args)
+        finally:
+            self._syncing = False
+
+    def _wheel_both(self, event):
+        """滚轮事件: 两个文本框一起滚动。"""
+        delta = getattr(event, 'delta', 0)
+        if delta:
+            steps = -1 if delta > 0 else 1
+            if abs(delta) >= 120:
+                steps = -delta // 120
+        else:
+            steps = 1 if event.num == 4 else -1
+        if not self._syncing:
+            self._syncing = True
+            try:
+                self.input_text.yview_scroll(steps, 'units')
+                self.output_text.yview_scroll(steps, 'units')
+            finally:
+                self._syncing = False
+        return 'break'
+
+    def _sync_output_view(self):
+        """把输出框滚动位置对齐到输入框。"""
+        if self._syncing:
+            return
+        self._syncing = True
+        try:
+            frac, _ = self.input_text.yview()
+            self.output_text.yview_moveto(frac)
+        finally:
+            self._syncing = False
 
     # ---------- 事件处理 ----------
     def _on_change(self, event=None):
@@ -345,6 +428,8 @@ class App:
             self.status_var.set(f'已还原 {total} 个字符 — {parts}')
         else:
             self.status_var.set('未发现需要还原的字符。')
+        # 输出内容刷新后, 滚动位置对齐到输入框 (键盘翻页等场景)
+        self.root.after_idle(self._sync_output_view)
 
     def copy_result(self):
         content = self.output_text.get('1.0', 'end-1c')
