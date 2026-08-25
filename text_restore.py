@@ -36,7 +36,10 @@ ChatGPT / Claude Code / Gemini 等模型有时会在输出中偷偷插入或替�
     * 窗口缩放时两个文本框等高自适应, 按钮始终可见
     * 选中联动(IDE diff 效果): 鼠标框选任一边的内容, 另一边的对应区域
       同步高亮(浅蓝色), 且拖拽选中时的自动滚动也会同步
-    * 深色主题: 右下角按钮一键切换, 偏好自动保存
+    * 深色主题: 右下角按钮一键切换
+    * 设置面板: 还原选项收纳在"设置"窗口中, 主界面更简洁
+    * 前后缀: 设置中可配置多行前缀/后缀, 主界面勾选是否附加到输出结果
+    * 所有设置(主题/选项/前后缀)持久化到 %APPDATA%/TextRestore/config.json
 """
 
 import os
@@ -370,14 +373,22 @@ class App:
         root.title(APP_TITLE)
         root.geometry('820x680')
         root.minsize(640, 320)
-        self.enabled = {k: tk.BooleanVar(value=True) for k in OPTION_ORDER}
         self._status_after = None
         self._syncing = False
         self._map = None          # 最近一次转换的映射信息
         self._last_result = ''
         self._in_line_starts = [0]
         self._out_line_starts = [0]
-        self.dark = bool(_load_config().get('dark', False))
+        self._settings_win = None
+        cfg = _load_config()
+        self.dark = bool(cfg.get('dark', False))
+        self.prefix_var = tk.StringVar(value=cfg.get('prefix', ''))
+        self.suffix_var = tk.StringVar(value=cfg.get('suffix', ''))
+        self.include_prefix = tk.BooleanVar(value=bool(cfg.get('include_prefix', False)))
+        self.include_suffix = tk.BooleanVar(value=bool(cfg.get('include_suffix', False)))
+        opts = cfg.get('options', {})
+        self.enabled = {k: tk.BooleanVar(value=bool(opts.get(k, True)))
+                        for k in OPTION_ORDER}
         self._build_ui()
         self.apply_theme(self.dark)
         self.input_text.focus_set()
@@ -416,22 +427,11 @@ class App:
         self.input_text.pack(side='left', fill='both', expand=True)
         self.in_scroll.pack(side='right', fill='y')
 
-        # ---- 还原选项 (两行 x 4列, 窄窗口下也不裁剪) ----
-        opt_frame = ttk.LabelFrame(main, text='还原选项', padding=8)
-        opt_frame.grid(row=4, column=0, sticky='ew', pady=(10, 8))
-        for i, key in enumerate(OPTION_ORDER):
-            ttk.Checkbutton(opt_frame, text=CHECK_LABELS[key],
-                            variable=self.enabled[key],
-                            command=self.do_convert).grid(row=i // 4, column=i % 4,
-                                                          padx=9, pady=2, sticky='w')
-        for col in range(4):
-            opt_frame.columnconfigure(col, weight=1)
-
         # ---- 输出区 ----
-        ttk.Label(main, text='输出(转换结果):').grid(row=5, column=0,
+        ttk.Label(main, text='输出(转换结果):').grid(row=4, column=0,
                                                     sticky='w', pady=(0, 2))
         out_frame = ttk.Frame(main)
-        out_frame.grid(row=6, column=0, sticky='nsew')
+        out_frame.grid(row=5, column=0, sticky='nsew')
         self.output_text = tk.Text(out_frame, height=8, font=TEXT_FONT,
                                    wrap='word')
         self.out_scroll = ttk.Scrollbar(out_frame, command=self._scroll_both)
@@ -441,7 +441,7 @@ class App:
 
         # 两个文本框等高、均匀分配空间, 缩放行为一致
         main.rowconfigure(3, weight=1, uniform='texts')
-        main.rowconfigure(6, weight=1, uniform='texts')
+        main.rowconfigure(5, weight=1, uniform='texts')
 
         # diff 高亮配色: 输入框替换字符飘红, 输出框还原字符飘绿
         self.input_text.tag_configure('red', foreground='#c0392b',
@@ -452,15 +452,22 @@ class App:
         # 输出框: 只读, 但允许鼠标选中, Ctrl+C 复制选中, Ctrl+A 全选
         self.output_text.bind('<Key>', self._readonly_block)
 
-        # ---- 底部: 复制按钮 + 主题切换 + 状态栏 ----
+        # ---- 状态信息 (独占一行) ----
+        self.status_var = tk.StringVar(value='就绪。')
+        self.status_label = ttk.Label(main, textvariable=self.status_var,
+                                      foreground='#1a6fb0')
+        self.status_label.grid(row=6, column=0, sticky='w', pady=(10, 0))
+
+        # ---- 底部: 复制/清空/设置 + 前后缀勾选 + 主题 ----
         bottom = ttk.Frame(main)
-        bottom.grid(row=7, column=0, sticky='ew', pady=(10, 0))
+        bottom.grid(row=7, column=0, sticky='ew', pady=(6, 0))
         ttk.Button(bottom, text='复制结果', command=self.copy_result).pack(side='left')
         ttk.Button(bottom, text='清空输入', command=self.clear_input).pack(side='left', padx=8)
-        self.status_var = tk.StringVar(value='就绪。')
-        self.status_label = ttk.Label(bottom, textvariable=self.status_var,
-                                      foreground='#1a6fb0')
-        self.status_label.pack(side='right')
+        ttk.Button(bottom, text='设置', command=self.open_settings).pack(side='left')
+        ttk.Checkbutton(bottom, text='包含前缀', variable=self.include_prefix,
+                        command=self._on_setting_changed).pack(side='left', padx=(16, 0))
+        ttk.Checkbutton(bottom, text='包含后缀', variable=self.include_suffix,
+                        command=self._on_setting_changed).pack(side='left', padx=(8, 0))
         self.theme_btn = ttk.Button(bottom, text='深色主题', command=self.toggle_theme)
         self.theme_btn.pack(side='right', padx=(0, 8))
 
@@ -526,7 +533,7 @@ class App:
     def toggle_theme(self):
         self.dark = not self.dark
         self.apply_theme(self.dark)
-        _save_config({'dark': self.dark})
+        self._save_settings()
 
     def apply_theme(self, dark):
         theme = THEMES['dark' if dark else 'light']
@@ -590,6 +597,91 @@ class App:
         self.status_label.configure(foreground=theme['status_fg'])
         self.hint_label.configure(foreground=theme['hint_fg'])
         self.theme_btn.configure(text='浅色主题' if dark else '深色主题')
+        # 设置窗口中的文本框也跟随主题
+        for w in (getattr(self, 'prefix_edit', None),
+                  getattr(self, 'suffix_edit', None)):
+            if w is not None and w.winfo_exists():
+                self._apply_text_widget_theme(w)
+
+    # ---------- 设置 ----------
+    def open_settings(self):
+        if self._settings_win is not None and self._settings_win.winfo_exists():
+            self._settings_win.lift()
+            self._settings_win.focus_set()
+            return
+        win = tk.Toplevel(self.root)
+        win.title('设置')
+        win.geometry('520x460')
+        win.resizable(False, False)
+        win.transient(self.root)
+        main = ttk.Frame(win, padding=10)
+        main.pack(fill='both', expand=True)
+
+        opt_frame = ttk.LabelFrame(main, text='还原选项', padding=8)
+        opt_frame.pack(fill='x')
+        for i, key in enumerate(OPTION_ORDER):
+            ttk.Checkbutton(opt_frame, text=CHECK_LABELS[key],
+                            variable=self.enabled[key],
+                            command=self._on_setting_changed).grid(
+                row=i // 4, column=i % 4, padx=9, pady=2, sticky='w')
+        for col in range(4):
+            opt_frame.columnconfigure(col, weight=1)
+
+        pf_frame = ttk.LabelFrame(main, text='前后缀 (附加到输出结果)', padding=8)
+        pf_frame.pack(fill='both', expand=True, pady=(10, 0))
+        ttk.Label(pf_frame, text='前缀 (支持多行):').pack(anchor='w')
+        self.prefix_edit = tk.Text(pf_frame, height=3, font=TEXT_FONT, wrap='word')
+        self._apply_text_widget_theme(self.prefix_edit)
+        self.prefix_edit.pack(fill='both', expand=True)
+        self.prefix_edit.insert('1.0', self.prefix_var.get())
+        ttk.Label(pf_frame, text='后缀 (支持多行):').pack(anchor='w', pady=(6, 0))
+        self.suffix_edit = tk.Text(pf_frame, height=3, font=TEXT_FONT, wrap='word')
+        self._apply_text_widget_theme(self.suffix_edit)
+        self.suffix_edit.pack(fill='both', expand=True)
+        self.suffix_edit.insert('1.0', self.suffix_var.get())
+
+        self.prefix_edit.bind('<KeyRelease>', self._on_prefix_edit)
+        self.suffix_edit.bind('<KeyRelease>', self._on_suffix_edit)
+
+        ttk.Button(main, text='完成', command=win.destroy).pack(anchor='e', pady=(10, 0))
+        self._settings_win = win
+
+    def _on_prefix_edit(self, event=None):
+        try:
+            self.prefix_var.set(self.prefix_edit.get('1.0', 'end-1c'))
+        except tk.TclError:
+            return
+        self._save_settings()
+        self.do_convert()
+
+    def _on_suffix_edit(self, event=None):
+        try:
+            self.suffix_var.set(self.suffix_edit.get('1.0', 'end-1c'))
+        except tk.TclError:
+            return
+        self._save_settings()
+        self.do_convert()
+
+    def _on_setting_changed(self):
+        self._save_settings()
+        self.do_convert()
+
+    def _save_settings(self):
+        _save_config({
+            'dark': self.dark,
+            'prefix': self.prefix_var.get(),
+            'suffix': self.suffix_var.get(),
+            'include_prefix': self.include_prefix.get(),
+            'include_suffix': self.include_suffix.get(),
+            'options': {k: self.enabled[k].get() for k in OPTION_ORDER},
+        })
+
+    def _apply_text_widget_theme(self, w):
+        theme = THEMES['dark' if self.dark else 'light']
+        w.configure(bg=theme['text_bg'], fg=theme['text_fg'],
+                    insertbackground=theme['text_fg'],
+                    highlightbackground=theme['root_bg'],
+                    highlightthickness=1)
 
     # ---------- 选中联动 (IDE diff 效果) ----------
     def _on_selection(self, event=None):
@@ -622,6 +714,10 @@ class App:
             e = src.index('sel.last')
         except tk.TclError:
             return
+        # 仅在源框确实有选区时, 才清除另一边旧的选区;
+        # 程序化 tag_remove('sel') 会触发排队的 <<Selection>> 事件,
+        # 若此时源框无选区则直接返回, 避免递归清除新选区
+        other.tag_remove('sel', '1.0', 'end')
         if src is self.input_text:
             rng = self._map_input_range(s, e)
         else:
@@ -637,22 +733,24 @@ class App:
         if s >= m['cut']:
             return None
         e = min(e, m['cut'])
-        os_ = m['in_to_out_start'][s]
-        oe = m['in_to_out_start'][e]
+        os_ = m['in_to_out_start'][s] + self._prefix_len
+        oe = m['in_to_out_start'][e] + self._prefix_len
         if os_ == oe:
             return None
-        return (_offset_to_index(os_, self._out_line_starts, len(self._last_result)),
-                _offset_to_index(oe, self._out_line_starts, len(self._last_result)))
+        return (_offset_to_index(os_, self._out_line_starts, len(self._last_display)),
+                _offset_to_index(oe, self._out_line_starts, len(self._last_display)))
 
     def _map_output_range(self, s_idx, e_idx):
         """输出框选区 -> 输入框对应区间 (返回 Tk 索引或 None)。"""
         m = self._map
         if not m['out_to_in']:
             return None
-        s = _idx_to_offset(s_idx, self._out_line_starts)
-        e = _idx_to_offset(e_idx, self._out_line_starts)
+        s = _idx_to_offset(s_idx, self._out_line_starts) - self._prefix_len
+        e = _idx_to_offset(e_idx, self._out_line_starts) - self._prefix_len
         total = len(m['out_to_in'])
-        s = min(s, total - 1)
+        if e <= 0 or s >= total:
+            return None
+        s = max(0, min(s, total - 1))
         e = min(e, total)
         if s >= e:
             return None
@@ -684,19 +782,26 @@ class App:
         raw = self.input_text.get('1.0', 'end-1c')
         enabled = {k: v.get() for k, v in self.enabled.items()}
         result, counts, red, green, mapping = convert_text(raw, enabled)
+        # 前后缀: 仅在勾选时附加
+        prefix = self.prefix_var.get() if self.include_prefix.get() else ''
+        suffix = self.suffix_var.get() if self.include_suffix.get() else ''
+        display = prefix + result + suffix
         self._map = mapping
         self._last_result = result
+        self._last_display = display
+        self._prefix_len = len(prefix)
         self._in_line_starts = _line_starts(raw)
-        self._out_line_starts = _line_starts(result)
+        self._out_line_starts = _line_starts(display)
         self.output_text.delete('1.0', 'end')
-        self.output_text.insert('1.0', result)
-        # diff 高亮: 输入框飘红, 输出框飘绿
+        self.output_text.insert('1.0', display)
+        # diff 高亮: 输入框飘红, 输出框飘绿 (绿色区间整体后移前缀长度)
         self.input_text.tag_remove('red', '1.0', 'end')
         self.output_text.tag_remove('green', '1.0', 'end')
+        plen = self._prefix_len
         for s, e in red:
             self.input_text.tag_add('red', f'1.0+{s}c', f'1.0+{e}c')
         for s, e in green:
-            self.output_text.tag_add('green', f'1.0+{s}c', f'1.0+{e}c')
+            self.output_text.tag_add('green', f'1.0+{s + plen}c', f'1.0+{e + plen}c')
         total = sum(counts.values())
         if total:
             parts = ' · '.join(f'{STATUS_NAMES[k]} {v}'
