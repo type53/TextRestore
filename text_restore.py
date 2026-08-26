@@ -341,6 +341,116 @@ THEMES = {
 }
 
 
+# ---------------- iOS 风格开关 ----------------
+
+SWITCH_THUMB = '#ffffff'
+SWITCH_ON = '#34c759'        # 浅色主题开启色 (iOS 绿)
+SWITCH_ON_DARK = '#30d158'   # 深色主题开启色
+SWITCH_OFF = '#e9e9eb'       # 浅色主题关闭色
+SWITCH_OFF_DARK = '#3a3a3c'  # 深色主题关闭色
+
+
+class Switch(tk.Canvas):
+    """iOS 风格开关控件, 绑定 tk.BooleanVar, 点击切换并带动画。
+
+    开启: 绿色轨道 + 白色圆点滑到右侧; 关闭: 灰色轨道 + 圆点滑到左侧。
+    """
+
+    def __init__(self, master, variable=None, command=None, dark=False,
+                 width=46, height=26, pad=2, bg='#f0f0f0', **kw):
+        super().__init__(master, width=width, height=height,
+                         highlightthickness=0, bd=0, bg=bg, **kw)
+        self._var = variable
+        self._command = command
+        self._dark = dark
+        self._width = width
+        self._height = height
+        self._pad = pad
+        self._anim = None
+        self._thumb_x = pad
+        self._items = None
+        self._thumb = None
+        if variable is not None:
+            variable.trace_add('write', lambda *a: self._draw())
+        self.bind('<Button-1>', self._on_click)
+        self._draw()
+
+    # ---------- 对外接口 ----------
+    def set_dark(self, dark, bg=None):
+        self._dark = dark
+        if bg:
+            self.configure(bg=bg)
+        self._draw()
+
+    # ---------- 内部 ----------
+    def _on_click(self, event=None):
+        if self._var is not None:
+            self._var.set(not self._var.get())
+        if self._command:
+            self._command()
+        return 'break'
+
+    def _is_on(self):
+        return bool(self._var.get()) if self._var is not None else False
+
+    def _track_color(self):
+        if self._is_on():
+            return SWITCH_ON_DARK if self._dark else SWITCH_ON
+        return SWITCH_OFF_DARK if self._dark else SWITCH_OFF
+
+    def _thumb_size(self):
+        return self._height - 2 * self._pad
+
+    def _place_thumb(self, x):
+        s = self._thumb_size()
+        self.coords(self._thumb, x, self._pad, x + s, self._pad + s)
+
+    def _draw(self):
+        color = self._track_color()
+        if self._items is None:
+            r = self._height / 2
+            self._items = [
+                self.create_rectangle(r, 0, self._width - r, self._height,
+                                      fill=color, outline=''),
+                self.create_oval(0, 0, 2 * r, self._height, fill=color, outline=''),
+                self.create_oval(self._width - 2 * r, 0, self._width, self._height,
+                                 fill=color, outline=''),
+            ]
+            self._thumb = self.create_oval(0, 0, 0, 0,
+                                           fill=SWITCH_THUMB, outline='')
+            self._place_thumb(self._pad)
+        else:
+            for item in self._items:
+                self.itemconfigure(item, fill=color)
+        target = self._width - self._height + self._pad if self._is_on() else self._pad
+        if self._anim is not None:
+            try:
+                self.after_cancel(self._anim)
+            except Exception:
+                pass
+            self._anim = None
+        if target != self._thumb_x:
+            self._animate(target)
+        else:
+            self._place_thumb(target)
+
+    def _animate(self, target):
+        step = (target - self._thumb_x) / 8.0
+
+        def tick():
+            self._thumb_x += step
+            if step == 0 or (step > 0 and self._thumb_x >= target) \
+                    or (step < 0 and self._thumb_x <= target):
+                self._thumb_x = target
+                self._place_thumb(target)
+                self._anim = None
+            else:
+                self._place_thumb(self._thumb_x)
+                self._anim = self.after(12, tick)
+
+        tick()
+
+
 def _config_path():
     base = os.environ.get('APPDATA') or os.path.expanduser('~')
     d = os.path.join(base, 'TextRestore')
@@ -379,6 +489,7 @@ class App:
         self._last_result = ''
         self._in_line_starts = [0]
         self._out_line_starts = [0]
+        self._switches = []       # 所有 Switch 控件, 主题切换时统一更新
         self._settings_win = None
         cfg = _load_config()
         self.dark = bool(cfg.get('dark', False))
@@ -458,16 +569,23 @@ class App:
                                       foreground='#1a6fb0')
         self.status_label.grid(row=6, column=0, sticky='w', pady=(10, 0))
 
-        # ---- 底部: 复制/清空/设置 + 前后缀勾选 + 主题 ----
+        # ---- 底部: 复制/清空/设置 + 前后缀开关 + 主题 ----
         bottom = ttk.Frame(main)
         bottom.grid(row=7, column=0, sticky='ew', pady=(6, 0))
         ttk.Button(bottom, text='复制结果', command=self.copy_result).pack(side='left')
         ttk.Button(bottom, text='清空输入', command=self.clear_input).pack(side='left', padx=8)
         ttk.Button(bottom, text='设置', command=self.open_settings).pack(side='left')
-        ttk.Checkbutton(bottom, text='包含前缀', variable=self.include_prefix,
-                        command=self._on_setting_changed).pack(side='left', padx=(16, 0))
-        ttk.Checkbutton(bottom, text='包含后缀', variable=self.include_suffix,
-                        command=self._on_setting_changed).pack(side='left', padx=(8, 0))
+        ttk.Label(bottom, text='包含前缀').pack(side='left', padx=(16, 4))
+        sw1 = Switch(bottom, variable=self.include_prefix,
+                     command=self._on_setting_changed, dark=self.dark,
+                     bg=THEMES['dark' if self.dark else 'light']['root_bg'])
+        sw1.pack(side='left')
+        ttk.Label(bottom, text='包含后缀').pack(side='left', padx=(16, 4))
+        sw2 = Switch(bottom, variable=self.include_suffix,
+                     command=self._on_setting_changed, dark=self.dark,
+                     bg=THEMES['dark' if self.dark else 'light']['root_bg'])
+        sw2.pack(side='left')
+        self._switches.extend([sw1, sw2])
         self.theme_btn = ttk.Button(bottom, text='深色主题', command=self.toggle_theme)
         self.theme_btn.pack(side='right', padx=(0, 8))
 
@@ -597,6 +715,10 @@ class App:
         self.status_label.configure(foreground=theme['status_fg'])
         self.hint_label.configure(foreground=theme['hint_fg'])
         self.theme_btn.configure(text='浅色主题' if dark else '深色主题')
+        # 所有开关控件跟随主题
+        for sw in self._switches:
+            if sw.winfo_exists():
+                sw.set_dark(dark, theme['root_bg'])
         # 设置窗口中的文本框也跟随主题
         for w in (getattr(self, 'prefix_edit', None),
                   getattr(self, 'suffix_edit', None)):
@@ -611,19 +733,24 @@ class App:
             return
         win = tk.Toplevel(self.root)
         win.title('设置')
-        win.geometry('520x460')
+        win.geometry('580x480')
         win.resizable(False, False)
         win.transient(self.root)
         main = ttk.Frame(win, padding=10)
         main.pack(fill='both', expand=True)
+        theme = THEMES['dark' if self.dark else 'light']
 
         opt_frame = ttk.LabelFrame(main, text='还原选项', padding=8)
         opt_frame.pack(fill='x')
         for i, key in enumerate(OPTION_ORDER):
-            ttk.Checkbutton(opt_frame, text=CHECK_LABELS[key],
-                            variable=self.enabled[key],
-                            command=self._on_setting_changed).grid(
-                row=i // 4, column=i % 4, padx=9, pady=2, sticky='w')
+            cell = ttk.Frame(opt_frame)
+            cell.grid(row=i // 4, column=i % 4, padx=6, pady=4, sticky='w')
+            sw = Switch(cell, variable=self.enabled[key],
+                        command=self._on_setting_changed, dark=self.dark,
+                        width=40, height=22, bg=theme['root_bg'])
+            sw.pack(side='left')
+            ttk.Label(cell, text=CHECK_LABELS[key]).pack(side='left', padx=(6, 0))
+            self._switches.append(sw)
         for col in range(4):
             opt_frame.columnconfigure(col, weight=1)
 
