@@ -39,14 +39,16 @@ ChatGPT / Claude Code / Gemini 等模型有时会在输出中偷偷插入或替�
     * 深色主题: 右下角按钮一键切换
     * 设置面板: 还原选项收纳在"设置"窗口中, 主界面更简洁
     * 前后缀: 设置中可配置多行前缀/后缀, 主界面勾选是否附加到输出结果
-    * 所有设置(主题/选项/前后缀)持久化到 %APPDATA%/TextRestore/config.json
+    * 字体与颜色: 输入框/输出框可分别设置字体、字号、替换字符与高亮的前景色/背景色
+    * 所有设置(主题/选项/前后缀/字体颜色)持久化到 %APPDATA%/TextRestore/config.json
 """
 
 import os
 import json
 import bisect
 import tkinter as tk
-from tkinter import ttk
+import tkinter.font as tkfont
+from tkinter import ttk, colorchooser
 import unicodedata
 
 APP_TITLE = "隐蔽字符还原工具"
@@ -528,6 +530,45 @@ class Switch(tk.Canvas):
         tick()
 
 
+class ColorButton(tk.Frame):
+    """颜色选择按钮: 色块 + 文字说明, 点击弹出系统取色器。
+
+    var 为 tk.StringVar, 值为 '#rrggbb'; 空字符串表示跟随主题默认。
+    """
+
+    def __init__(self, master, label, var, theme_getter, on_change):
+        super().__init__(master)
+        self._var = var
+        self._theme_getter = theme_getter
+        self._on_change = on_change
+        self._label = label
+        self._swatch = tk.Button(self, width=4, relief='solid', bd=1,
+                                 command=self._pick)
+        self._swatch.pack(side='left')
+        self._text = tk.Label(self, text='', width=14, anchor='w')
+        self._text.pack(side='left', padx=(4, 0))
+        var.trace_add('write', lambda *a: self._refresh())
+        self._refresh()
+
+    def _effective(self):
+        v = self._var.get()
+        return v or self._theme_getter()
+
+    def _refresh(self):
+        c = self._effective()
+        self._swatch.configure(bg=c, activebackground=c)
+        custom = bool(self._var.get())
+        self._text.configure(text=f'{self._label}: {c}' if custom
+                             else f'{self._label}: 默认')
+
+    def _pick(self):
+        c = colorchooser.askcolor(color=self._effective(),
+                                  parent=self.winfo_toplevel())[1]
+        if c:
+            self._var.set(c)
+            self._on_change()
+
+
 def _config_path():
     base = os.environ.get('APPDATA') or os.path.expanduser('~')
     d = os.path.join(base, 'TextRestore')
@@ -577,6 +618,21 @@ class App:
         opts = cfg.get('options', {})
         self.enabled = {k: tk.BooleanVar(value=bool(opts.get(k, True)))
                         for k in OPTION_ORDER}
+        # 字体与颜色配置 (每个框: family/size + diff 标记与高亮的 前景/背景)
+        # 颜色值为 '' 时表示跟随主题默认
+        fonts_cfg = cfg.get('fonts', {})
+        self.font_vars = {}
+        for key in ('input', 'output'):
+            fc = fonts_cfg.get(key, {})
+            self.font_vars[key] = {
+                'family': tk.StringVar(value=fc.get('family') or TEXT_FONT[0]),
+                'size': tk.StringVar(value=str(fc.get('size') or TEXT_FONT[1])),
+                'diff_fg': tk.StringVar(value=fc.get('diff_fg') or ''),
+                'diff_bg': tk.StringVar(value=fc.get('diff_bg') or ''),
+                'hl_fg': tk.StringVar(value=fc.get('hl_fg') or ''),
+                'hl_bg': tk.StringVar(value=fc.get('hl_bg') or ''),
+            }
+        self._font_list = None   # 懒加载系统字体列表
         self._build_ui()
         self.apply_theme(self.dark)
         self.input_text.focus_set()
@@ -772,26 +828,11 @@ class App:
                         insertbackground=theme['text_fg'],
                         highlightbackground=theme['root_bg'],
                         highlightthickness=1)
-            if theme['sel_fg']:
-                w.tag_configure('sel', background=theme['sel_bg'],
-                                foreground=theme['sel_fg'])
-            else:
-                w.tag_configure('sel', background=theme['sel_bg'])
-            if theme['mirror_fg']:
-                w.tag_configure('mirror', background=theme['mirror_bg'],
-                                foreground=theme['mirror_fg'])
-            else:
-                w.tag_configure('mirror', background=theme['mirror_bg'])
-            w.tag_raise('mirror')   # 保证联动高亮盖过 diff 标记
-        self.input_text.tag_configure('red', foreground=theme['red_fg'],
-                                      background=theme['red_bg'])
-        self.output_text.tag_configure('green', foreground=theme['green_fg'],
-                                       background=theme['green_bg'])
-        self.legend_red.configure(foreground=theme['red_fg'])
-        self.legend_green.configure(foreground=theme['green_fg'])
         self.status_label.configure(foreground=theme['status_fg'])
         self.hint_label.configure(foreground=theme['hint_fg'])
         self.theme_btn.configure(text='浅色主题' if dark else '深色主题')
+        # 字体/字号/标记颜色/高亮颜色 (主题默认 + 用户自定义覆盖)
+        self._apply_appearance()
         # 所有开关控件跟随主题
         for sw in self._switches:
             if sw.winfo_exists():
@@ -802,6 +843,92 @@ class App:
             if w is not None and w.winfo_exists():
                 self._apply_text_widget_theme(w)
 
+    # ---------- 字体与颜色 ----------
+    def _effective_color(self, key, kind):
+        """取某框某类颜色的有效值 (自定义或主题默认)。"""
+        v = self.font_vars[key][kind].get()
+        if v:
+            return v
+        theme = THEMES['dark' if self.dark else 'light']
+        if kind == 'diff_fg':
+            return theme['red_fg' if key == 'input' else 'green_fg']
+        if kind == 'diff_bg':
+            return theme['red_bg' if key == 'input' else 'green_bg']
+        if kind == 'hl_fg':
+            return theme['sel_fg']
+        return theme['sel_bg']   # hl_bg
+
+    def _apply_appearance(self):
+        """应用字体/字号与各类颜色 (主题默认 + 用户自定义覆盖)。"""
+        theme = THEMES['dark' if self.dark else 'light']
+        for key, w in (('input', self.input_text), ('output', self.output_text)):
+            fam = self.font_vars[key]['family'].get().strip() or TEXT_FONT[0]
+            try:
+                size = int(float(self.font_vars[key]['size'].get()))
+            except (TypeError, ValueError):
+                size = TEXT_FONT[1]
+            w.configure(font=(fam, size))
+            tag = 'red' if key == 'input' else 'green'
+            w.tag_configure(tag,
+                            foreground=self._effective_color(key, 'diff_fg'),
+                            background=self._effective_color(key, 'diff_bg'))
+            h_bg = self._effective_color(key, 'hl_bg')
+            h_fg = self._effective_color(key, 'hl_fg')
+            if h_fg:
+                w.tag_configure('sel', background=h_bg, foreground=h_fg)
+                w.tag_configure('mirror', background=h_bg, foreground=h_fg)
+            else:
+                w.tag_configure('sel', background=h_bg)
+                w.tag_configure('mirror', background=h_bg)
+            w.tag_raise('mirror')   # 保证联动高亮盖过 diff 标记
+        # 图例颜色跟随输入/输出的替换字符前景色
+        self.legend_red.configure(foreground=self._effective_color('input', 'diff_fg'))
+        self.legend_green.configure(foreground=self._effective_color('output', 'diff_fg'))
+        # 设置窗口中的前缀/后缀编辑框使用输入框字体
+        for w in (getattr(self, 'prefix_edit', None),
+                  getattr(self, 'suffix_edit', None)):
+            if w is not None and w.winfo_exists():
+                fam = self.font_vars['input']['family'].get().strip() or TEXT_FONT[0]
+                try:
+                    size = int(float(self.font_vars['input']['size'].get()))
+                except (TypeError, ValueError):
+                    size = TEXT_FONT[1]
+                w.configure(font=(fam, size))
+
+    def _font_list_cached(self):
+        if self._font_list is None:
+            try:
+                fonts = sorted(set(tkfont.families(root=self.root)))
+            except Exception:
+                fonts = []
+            if TEXT_FONT[0] not in fonts:
+                fonts.insert(0, TEXT_FONT[0])
+            self._font_list = fonts
+        return self._font_list
+
+    def _set_font_val(self, key, field, value):
+        value = (value or '').strip()
+        if not value:
+            return
+        if field == 'size':
+            try:
+                int(float(value))
+            except ValueError:
+                return
+        self.font_vars[key][field].set(value)
+        self._on_appearance_changed()
+
+    def _reset_box_colors(self, key):
+        """清除某框的自定义颜色, 恢复跟随主题。"""
+        for f in ('diff_fg', 'diff_bg', 'hl_fg', 'hl_bg'):
+            self.font_vars[key][f].set('')
+        self._on_appearance_changed()
+
+    def _on_appearance_changed(self, *a):
+        self._apply_appearance()
+        self._save_settings()
+        self.do_convert()
+
     # ---------- 设置 ----------
     def open_settings(self):
         if self._settings_win is not None and self._settings_win.winfo_exists():
@@ -810,14 +937,18 @@ class App:
             return
         win = tk.Toplevel(self.root)
         win.title('设置')
-        win.geometry('580x480')
+        win.geometry('640x520')
         win.resizable(False, False)
         win.transient(self.root)
-        main = ttk.Frame(win, padding=10)
-        main.pack(fill='both', expand=True)
         theme = THEMES['dark' if self.dark else 'light']
 
-        opt_frame = ttk.LabelFrame(main, text='还原选项', padding=8)
+        nb = ttk.Notebook(win)
+        nb.pack(fill='both', expand=True, padx=10, pady=(10, 0))
+
+        # ---- 页 1: 还原选项 ----
+        tab1 = ttk.Frame(nb, padding=8)
+        nb.add(tab1, text='还原选项')
+        opt_frame = ttk.LabelFrame(tab1, text='还原选项', padding=8)
         opt_frame.pack(fill='x')
         for i, key in enumerate(OPTION_ORDER):
             cell = ttk.Frame(opt_frame)
@@ -831,8 +962,11 @@ class App:
         for col in range(4):
             opt_frame.columnconfigure(col, weight=1)
 
-        pf_frame = ttk.LabelFrame(main, text='前后缀 (附加到输出结果)', padding=8)
-        pf_frame.pack(fill='both', expand=True, pady=(10, 0))
+        # ---- 页 2: 前后缀 ----
+        tab2 = ttk.Frame(nb, padding=8)
+        nb.add(tab2, text='前后缀')
+        pf_frame = ttk.LabelFrame(tab2, text='前后缀 (附加到输出结果)', padding=8)
+        pf_frame.pack(fill='both', expand=True)
         ttk.Label(pf_frame, text='前缀 (支持多行):').pack(anchor='w')
         self.prefix_edit = tk.Text(pf_frame, height=3, font=TEXT_FONT, wrap='word')
         self._apply_text_widget_theme(self.prefix_edit)
@@ -843,12 +977,67 @@ class App:
         self._apply_text_widget_theme(self.suffix_edit)
         self.suffix_edit.pack(fill='both', expand=True)
         self.suffix_edit.insert('1.0', self.suffix_var.get())
-
         self.prefix_edit.bind('<KeyRelease>', self._on_prefix_edit)
         self.suffix_edit.bind('<KeyRelease>', self._on_suffix_edit)
 
-        ttk.Button(main, text='完成', command=win.destroy).pack(anchor='e', pady=(10, 0))
+        # ---- 页 3: 外观 (字体与颜色) ----
+        tab3 = ttk.Frame(nb, padding=8)
+        nb.add(tab3, text='外观')
+        ttk.Label(tab3, text='输入框与输出框可分别设置字体、字号、替换字符颜色与高亮颜色。'
+                             '颜色留空(点击"恢复默认")即跟随主题。',
+                  foreground=theme['hint_fg'], wraplength=580).pack(anchor='w')
+        self._build_font_section(tab3, 'input', '输入框')
+        self._build_font_section(tab3, 'output', '输出框')
+
+        ttk.Button(win, text='完成', command=win.destroy).pack(anchor='e', padx=10, pady=8)
         self._settings_win = win
+
+    def _build_font_section(self, parent, key, title):
+        """外观页中单个文本框的字体/颜色设置区。"""
+        theme = THEMES['dark' if self.dark else 'light']
+        frame = ttk.LabelFrame(parent, text=title, padding=8)
+        frame.pack(fill='x', pady=(8, 0))
+        frame.columnconfigure(1, weight=1)
+        fv = self.font_vars[key]
+        set_val = lambda field, w: lambda e=None: self._set_font_val(key, field, w.get())
+
+        ttk.Label(frame, text='字体:').grid(row=0, column=0, sticky='w')
+        cb = ttk.Combobox(frame, values=self._font_list_cached(), width=30)
+        cb.set(fv['family'].get())
+        cb.grid(row=0, column=1, columnspan=2, sticky='we', padx=(6, 0))
+        cb.bind('<<ComboboxSelected>>', set_val('family', cb))
+        cb.bind('<KeyRelease>', set_val('family', cb))
+
+        ttk.Label(frame, text='字号:').grid(row=1, column=0, sticky='w', pady=(6, 0))
+        sp = ttk.Spinbox(frame, from_=8, to=36, width=6)
+        sp.set(fv['size'].get())
+        sp.grid(row=1, column=1, sticky='w', padx=(6, 0), pady=(6, 0))
+        sp.configure(command=set_val('size', sp))
+        sp.bind('<KeyRelease>', set_val('size', sp))
+
+        ttk.Label(frame, text='替换字符颜色:').grid(row=2, column=0, sticky='w', pady=(6, 0))
+        ColorButton(frame, '前景', fv['diff_fg'],
+                    lambda: self._effective_color(key, 'diff_fg'),
+                    self._on_appearance_changed).grid(row=2, column=1, sticky='w',
+                                                      padx=(6, 0), pady=(6, 0))
+        ColorButton(frame, '背景', fv['diff_bg'],
+                    lambda: self._effective_color(key, 'diff_bg'),
+                    self._on_appearance_changed).grid(row=2, column=2, sticky='w',
+                                                      padx=(6, 0), pady=(6, 0))
+
+        ttk.Label(frame, text='高亮颜色:').grid(row=3, column=0, sticky='w', pady=(6, 0))
+        ColorButton(frame, '前景', fv['hl_fg'],
+                    lambda: self._effective_color(key, 'hl_fg'),
+                    self._on_appearance_changed).grid(row=3, column=1, sticky='w',
+                                                      padx=(6, 0), pady=(6, 0))
+        ColorButton(frame, '背景', fv['hl_bg'],
+                    lambda: self._effective_color(key, 'hl_bg'),
+                    self._on_appearance_changed).grid(row=3, column=2, sticky='w',
+                                                      padx=(6, 0), pady=(6, 0))
+
+        ttk.Button(frame, text='恢复默认 (跟随主题)',
+                   command=lambda: self._reset_box_colors(key)).grid(
+            row=4, column=0, columnspan=3, sticky='w', pady=(8, 0))
 
     def _on_prefix_edit(self, event=None):
         try:
@@ -871,6 +1060,21 @@ class App:
         self.do_convert()
 
     def _save_settings(self):
+        fonts = {}
+        for key in ('input', 'output'):
+            fv = self.font_vars[key]
+            try:
+                size = int(float(fv['size'].get()))
+            except (TypeError, ValueError):
+                size = None
+            fonts[key] = {
+                'family': fv['family'].get().strip() or None,
+                'size': size,
+                'diff_fg': fv['diff_fg'].get() or None,
+                'diff_bg': fv['diff_bg'].get() or None,
+                'hl_fg': fv['hl_fg'].get() or None,
+                'hl_bg': fv['hl_bg'].get() or None,
+            }
         _save_config({
             'dark': self.dark,
             'prefix': self.prefix_var.get(),
@@ -878,6 +1082,7 @@ class App:
             'include_prefix': self.include_prefix.get(),
             'include_suffix': self.include_suffix.get(),
             'options': {k: self.enabled[k].get() for k in OPTION_ORDER},
+            'fonts': fonts,
         })
 
     def _apply_text_widget_theme(self, w):
