@@ -536,8 +536,8 @@ class ColorButton(tk.Frame):
     var 为 tk.StringVar, 值为 '#rrggbb'; 空字符串表示跟随主题默认。
     """
 
-    def __init__(self, master, label, var, theme_getter, on_change):
-        super().__init__(master)
+    def __init__(self, master, label, var, theme_getter, on_change, bg='#f0f0f0'):
+        super().__init__(master, bg=bg)
         self._var = var
         self._theme_getter = theme_getter
         self._on_change = on_change
@@ -545,7 +545,7 @@ class ColorButton(tk.Frame):
         self._swatch = tk.Button(self, width=4, relief='solid', bd=1,
                                  command=self._pick)
         self._swatch.pack(side='left')
-        self._text = tk.Label(self, text='', width=14, anchor='w')
+        self._text = ttk.Label(self, text='', width=14, anchor='w')
         self._text.pack(side='left', padx=(4, 0))
         var.trace_add('write', lambda *a: self._refresh())
         self._refresh()
@@ -567,6 +567,46 @@ class ColorButton(tk.Frame):
         if c:
             self._var.set(c)
             self._on_change()
+
+    def set_theme(self, dark, bg):
+        self.configure(bg=bg)
+
+
+class ScrollableFrame(ttk.Frame):
+    """可滚动内容区: Canvas + 内部 Frame + 纵向滚动条。"""
+
+    def __init__(self, master, **kw):
+        super().__init__(master, **kw)
+        self.canvas = tk.Canvas(self, highlightthickness=0, bd=0)
+        self.vsb = ttk.Scrollbar(self, orient='vertical', command=self.canvas.yview)
+        self.inner = ttk.Frame(self.canvas)
+        self._win = self.canvas.create_window((0, 0), window=self.inner, anchor='nw')
+        self.canvas.configure(yscrollcommand=self.vsb.set)
+        self.canvas.pack(side='left', fill='both', expand=True)
+        self.vsb.pack(side='right', fill='y')
+        self.inner.bind('<Configure>', self._on_inner_configure)
+        self.canvas.bind('<Configure>', self._on_canvas_configure)
+        self.canvas.bind('<MouseWheel>', self.on_wheel)
+        self.inner.bind('<MouseWheel>', self.on_wheel)
+        self.canvas.bind('<Button-4>', self.on_wheel)
+        self.canvas.bind('<Button-5>', self.on_wheel)
+
+    def _on_inner_configure(self, event=None):
+        self.canvas.configure(scrollregion=self.canvas.bbox('all'))
+
+    def _on_canvas_configure(self, event):
+        self.canvas.itemconfigure(self._win, width=event.width)
+
+    def on_wheel(self, event):
+        delta = getattr(event, 'delta', 0)
+        if delta:
+            steps = -1 if delta > 0 else 1
+            if abs(delta) >= 120:
+                steps = -delta // 120
+        else:
+            steps = 1 if event.num == 4 else -1
+        self.canvas.yview_scroll(steps, 'units')
+        return 'break'
 
 
 def _config_path():
@@ -609,6 +649,9 @@ class App:
         self._out_line_starts = [0]
         self._switches = []       # 所有 Switch 控件, 主题切换时统一更新
         self._settings_win = None
+        self._settings_nav = None
+        self._settings_canvas = None
+        self._color_buttons = []  # 设置窗口中的取色按钮, 主题切换时统一更新
         cfg = _load_config()
         self.dark = bool(cfg.get('dark', False))
         self.prefix_var = tk.StringVar(value=cfg.get('prefix', ''))
@@ -842,6 +885,8 @@ class App:
                   getattr(self, 'suffix_edit', None)):
             if w is not None and w.winfo_exists():
                 self._apply_text_widget_theme(w)
+        # 设置窗口自身的 tk 控件 (导航/内容区/取色按钮) 跟随主题
+        self._theme_settings_dialog()
 
     # ---------- 字体与颜色 ----------
     def _effective_color(self, key, kind):
@@ -935,20 +980,77 @@ class App:
             self._settings_win.lift()
             self._settings_win.focus_set()
             return
+        theme = THEMES['dark' if self.dark else 'light']
         win = tk.Toplevel(self.root)
         win.title('设置')
-        win.geometry('640x520')
-        win.resizable(False, False)
+        win.geometry('720x540')
+        win.minsize(600, 380)
         win.transient(self.root)
+
+        body = ttk.Frame(win)
+        body.pack(fill='both', expand=True, padx=10, pady=10)
+
+        # ---- 左侧分区导航 ----
+        sidebar = ttk.Frame(body)
+        sidebar.pack(side='left', fill='y', padx=(0, 10))
+        self._settings_nav = tk.Listbox(
+            sidebar, width=11, activestyle='none', exportselection=False,
+            relief='flat', bd=0, highlightthickness=0, font=UI_FONT)
+        self._settings_nav.pack(side='left', fill='y')
+        for name in ('还原选项', '前后缀', '外观'):
+            self._settings_nav.insert('end', name)
+        self._settings_nav.bind('<<ListboxSelect>>', self._on_nav_select)
+        self._settings_nav.selection_set(0)
+
+        # ---- 右侧滚动内容区 ----
+        self._settings_scroll = ScrollableFrame(body)
+        self._settings_scroll.pack(side='left', fill='both', expand=True)
+        self._settings_canvas = self._settings_scroll.canvas
+        self._settings_inner = self._settings_scroll.inner
+
+        ttk.Button(win, text='完成', command=win.destroy).pack(anchor='e', padx=10, pady=(0, 10))
+
+        self._settings_win = win
+        self._theme_settings_dialog()
+        self._show_section(0)
+        self._settings_nav.focus_set()
+
+    def _on_nav_select(self, event=None):
+        sel = self._settings_nav.curselection()
+        if sel:
+            self._show_section(sel[0])
+
+    def _show_section(self, index):
+        """重建右侧滚动区域中的指定分区内容。"""
+        for w in self._settings_inner.winfo_children():
+            w.destroy()
+        if index == 0:
+            self._build_section_options()
+        elif index == 1:
+            self._build_section_prefix()
+        else:
+            self._build_section_appearance()
+        self._settings_canvas.yview_moveto(0)
+        self._bind_section_wheel()
+
+    def _bind_section_wheel(self):
+        """让分区内所有控件上的滚轮都滚动整个内容区 (文本框除外)。"""
+
+        def walk(w):
+            yield w
+            for c in w.winfo_children():
+                yield from walk(c)
+
+        for w in walk(self._settings_inner):
+            if isinstance(w, tk.Text):
+                continue
+            w.bind('<MouseWheel>', self._settings_scroll.on_wheel)
+            w.bind('<Button-4>', self._settings_scroll.on_wheel)
+            w.bind('<Button-5>', self._settings_scroll.on_wheel)
+
+    def _build_section_options(self):
         theme = THEMES['dark' if self.dark else 'light']
-
-        nb = ttk.Notebook(win)
-        nb.pack(fill='both', expand=True, padx=10, pady=(10, 0))
-
-        # ---- 页 1: 还原选项 ----
-        tab1 = ttk.Frame(nb, padding=8)
-        nb.add(tab1, text='还原选项')
-        opt_frame = ttk.LabelFrame(tab1, text='还原选项', padding=8)
+        opt_frame = ttk.LabelFrame(self._settings_inner, text='还原选项', padding=8)
         opt_frame.pack(fill='x')
         for i, key in enumerate(OPTION_ORDER):
             cell = ttk.Frame(opt_frame)
@@ -961,36 +1063,56 @@ class App:
             self._switches.append(sw)
         for col in range(4):
             opt_frame.columnconfigure(col, weight=1)
+        ttk.Label(self._settings_inner,
+                  text='改动即时生效并自动保存。', foreground=theme['hint_fg']
+                  ).pack(anchor='w', pady=(8, 0))
 
-        # ---- 页 2: 前后缀 ----
-        tab2 = ttk.Frame(nb, padding=8)
-        nb.add(tab2, text='前后缀')
-        pf_frame = ttk.LabelFrame(tab2, text='前后缀 (附加到输出结果)', padding=8)
-        pf_frame.pack(fill='both', expand=True)
+    def _build_section_prefix(self):
+        pf_frame = ttk.LabelFrame(self._settings_inner, text='前后缀 (附加到输出结果)', padding=8)
+        pf_frame.pack(fill='x')
         ttk.Label(pf_frame, text='前缀 (支持多行):').pack(anchor='w')
         self.prefix_edit = tk.Text(pf_frame, height=3, font=TEXT_FONT, wrap='word')
         self._apply_text_widget_theme(self.prefix_edit)
-        self.prefix_edit.pack(fill='both', expand=True)
+        self.prefix_edit.pack(fill='x')
         self.prefix_edit.insert('1.0', self.prefix_var.get())
         ttk.Label(pf_frame, text='后缀 (支持多行):').pack(anchor='w', pady=(6, 0))
         self.suffix_edit = tk.Text(pf_frame, height=3, font=TEXT_FONT, wrap='word')
         self._apply_text_widget_theme(self.suffix_edit)
-        self.suffix_edit.pack(fill='both', expand=True)
+        self.suffix_edit.pack(fill='x')
         self.suffix_edit.insert('1.0', self.suffix_var.get())
         self.prefix_edit.bind('<KeyRelease>', self._on_prefix_edit)
         self.suffix_edit.bind('<KeyRelease>', self._on_suffix_edit)
+        theme = THEMES['dark' if self.dark else 'light']
+        ttk.Label(self._settings_inner,
+                  text='在主界面勾选"包含前缀 / 包含后缀"后附加到输出结果。',
+                  foreground=theme['hint_fg']).pack(anchor='w', pady=(8, 0))
 
-        # ---- 页 3: 外观 (字体与颜色) ----
-        tab3 = ttk.Frame(nb, padding=8)
-        nb.add(tab3, text='外观')
-        ttk.Label(tab3, text='输入框与输出框可分别设置字体、字号、替换字符颜色与高亮颜色。'
-                             '颜色留空(点击"恢复默认")即跟随主题。',
-                  foreground=theme['hint_fg'], wraplength=580).pack(anchor='w')
-        self._build_font_section(tab3, 'input', '输入框')
-        self._build_font_section(tab3, 'output', '输出框')
+    def _build_section_appearance(self):
+        theme = THEMES['dark' if self.dark else 'light']
+        ttk.Label(self._settings_inner,
+                  text='输入框与输出框可分别设置字体、字号、替换字符颜色与高亮颜色。'
+                       '颜色留空(点击"恢复默认")即跟随主题。',
+                  foreground=theme['hint_fg'], wraplength=520).pack(anchor='w')
+        self._build_font_section(self._settings_inner, 'input', '输入框')
+        self._build_font_section(self._settings_inner, 'output', '输出框')
 
-        ttk.Button(win, text='完成', command=win.destroy).pack(anchor='e', padx=10, pady=8)
-        self._settings_win = win
+    def _theme_settings_dialog(self):
+        """设置窗口中的 tk 控件 (导航/内容区/取色按钮) 跟随主题。"""
+        theme = THEMES['dark' if self.dark else 'light']
+        if self._settings_win is not None and self._settings_win.winfo_exists():
+            self._settings_win.configure(bg=theme['root_bg'])
+        if self._settings_nav is not None:
+            self._settings_nav.configure(
+                bg='#252526' if self.dark else '#f5f5f5',
+                fg=theme['text_fg'],
+                selectbackground='#264f78' if self.dark else '#c9e2ff',
+                selectforeground='#ffffff' if self.dark else '#000000',
+                highlightbackground=theme['root_bg'])
+        if self._settings_canvas is not None:
+            self._settings_canvas.configure(bg=theme['root_bg'])
+        for cb in self._color_buttons:
+            if cb.winfo_exists():
+                cb.set_theme(self.dark, theme['root_bg'])
 
     def _build_font_section(self, parent, key, title):
         """外观页中单个文本框的字体/颜色设置区。"""
@@ -1016,24 +1138,21 @@ class App:
         sp.bind('<KeyRelease>', set_val('size', sp))
 
         ttk.Label(frame, text='替换字符颜色:').grid(row=2, column=0, sticky='w', pady=(6, 0))
-        ColorButton(frame, '前景', fv['diff_fg'],
-                    lambda: self._effective_color(key, 'diff_fg'),
-                    self._on_appearance_changed).grid(row=2, column=1, sticky='w',
-                                                      padx=(6, 0), pady=(6, 0))
-        ColorButton(frame, '背景', fv['diff_bg'],
-                    lambda: self._effective_color(key, 'diff_bg'),
-                    self._on_appearance_changed).grid(row=2, column=2, sticky='w',
-                                                      padx=(6, 0), pady=(6, 0))
+
+        def make_cb(kind, label):
+            cb = ColorButton(frame, label, fv[kind],
+                             lambda: self._effective_color(key, kind),
+                             self._on_appearance_changed,
+                             bg=theme['root_bg'])
+            self._color_buttons.append(cb)
+            return cb
+
+        make_cb('diff_fg', '前景').grid(row=2, column=1, sticky='w', padx=(6, 0), pady=(6, 0))
+        make_cb('diff_bg', '背景').grid(row=2, column=2, sticky='w', padx=(6, 0), pady=(6, 0))
 
         ttk.Label(frame, text='高亮颜色:').grid(row=3, column=0, sticky='w', pady=(6, 0))
-        ColorButton(frame, '前景', fv['hl_fg'],
-                    lambda: self._effective_color(key, 'hl_fg'),
-                    self._on_appearance_changed).grid(row=3, column=1, sticky='w',
-                                                      padx=(6, 0), pady=(6, 0))
-        ColorButton(frame, '背景', fv['hl_bg'],
-                    lambda: self._effective_color(key, 'hl_bg'),
-                    self._on_appearance_changed).grid(row=3, column=2, sticky='w',
-                                                      padx=(6, 0), pady=(6, 0))
+        make_cb('hl_fg', '前景').grid(row=3, column=1, sticky='w', padx=(6, 0), pady=(6, 0))
+        make_cb('hl_bg', '背景').grid(row=3, column=2, sticky='w', padx=(6, 0), pady=(6, 0))
 
         ttk.Button(frame, text='恢复默认 (跟随主题)',
                    command=lambda: self._reset_box_colors(key)).grid(
