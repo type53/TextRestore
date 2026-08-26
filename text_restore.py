@@ -652,6 +652,9 @@ class App:
         self._settings_nav = None
         self._settings_canvas = None
         self._color_buttons = []  # 设置窗口中的取色按钮, 主题切换时统一更新
+        self._sections = []       # 设置窗口各分区容器 (锚点)
+        self._nav_guard = False   # 防止导航点击与 scrollspy 互相触发
+        self._nav_current = -1
         cfg = _load_config()
         self.dark = bool(cfg.get('dark', False))
         self.prefix_var = tk.StringVar(value=cfg.get('prefix', ''))
@@ -1002,36 +1005,97 @@ class App:
         self._settings_nav.bind('<<ListboxSelect>>', self._on_nav_select)
         self._settings_nav.selection_set(0)
 
-        # ---- 右侧滚动内容区 ----
+        # ---- 右侧滚动内容区 (所有分区堆叠在同一滚动区域) ----
         self._settings_scroll = ScrollableFrame(body)
         self._settings_scroll.pack(side='left', fill='both', expand=True)
         self._settings_canvas = self._settings_scroll.canvas
         self._settings_inner = self._settings_scroll.inner
+        # 滚动位置变化时: 更新滑块 + 反向同步导航选中状态 (scrollspy)
+        self._settings_canvas.configure(yscrollcommand=self._on_settings_view)
 
         ttk.Button(win, text='完成', command=win.destroy).pack(anchor='e', padx=10, pady=(0, 10))
 
         self._settings_win = win
         self._theme_settings_dialog()
-        self._show_section(0)
+        self._build_all_sections()
         self._settings_nav.focus_set()
 
     def _on_nav_select(self, event=None):
+        """点击左侧导航: 平滑滚动到对应分区位置 (锚点导航)。"""
         sel = self._settings_nav.curselection()
-        if sel:
-            self._show_section(sel[0])
+        if not sel or not self._sections:
+            return
+        self._nav_guard = True
+        try:
+            self._scroll_to_section(self._sections[sel[0]])
+        finally:
+            self._nav_guard = False
 
-    def _show_section(self, index):
-        """重建右侧滚动区域中的指定分区内容。"""
+    def _build_all_sections(self):
+        """把所有分区一次性构建到同一个滚动内容区中。"""
         for w in self._settings_inner.winfo_children():
             w.destroy()
-        if index == 0:
-            self._build_section_options()
-        elif index == 1:
-            self._build_section_prefix()
-        else:
-            self._build_section_appearance()
+        self._sections = []
+        self._sections.append(self._build_section_options())
+        self._sections.append(self._build_section_prefix())
+        self._sections.append(self._build_section_appearance())
         self._settings_canvas.yview_moveto(0)
         self._bind_section_wheel()
+        self._nav_current = -1
+        self._update_active_nav()
+
+    def _scroll_to_section(self, widget):
+        """把指定分区顶部滚动到可视区域顶部。
+
+        注意: yview moveto 的 fraction 是相对总内容高度的比例,
+        因此用 winfo_y / inner 高度, 而不是可滚动量。
+        """
+        self._settings_inner.update_idletasks()
+        inner_h = max(1, self._settings_inner.winfo_height())
+        frac = min(1.0, max(0.0, widget.winfo_y() / inner_h))
+        self._settings_canvas.yview_moveto(frac)
+
+    def _on_settings_view(self, first, last):
+        """滚动条命令: 更新滑块 + 反向同步导航选中状态 (scrollspy)。"""
+        self._settings_scroll.vsb.set(first, last)
+        self._update_active_nav()
+
+    def _update_active_nav(self):
+        """根据当前滚动位置更新导航选中项。"""
+        if self._nav_guard or not self._sections:
+            return
+        try:
+            top = float(self._settings_canvas.yview()[0])
+        except (ValueError, tk.TclError):
+            return
+        idx = self._section_index_at(top)
+        if idx != self._nav_current:
+            self._nav_current = idx
+            self._settings_nav.selection_clear(0, 'end')
+            self._settings_nav.selection_set(idx)
+            self._settings_nav.see(idx)
+
+    def _section_index_at(self, top_frac):
+        """视口顶部所在的分区下标; 滚动到底部时选中最后一个分区。"""
+        self._settings_inner.update_idletasks()
+        canvas_h = max(1, self._settings_canvas.winfo_height())
+        inner_h = max(1, self._settings_inner.winfo_height())
+        max_scroll = max(0, inner_h - canvas_h)
+        if max_scroll <= 0:
+            return 0   # 内容不足一屏, 全部可见, 选第一个分区
+        # 已滚到底部: 视图下缘接近 1.0 (yview 顶部比例上限为 1 - 视口占比)
+        try:
+            _, bottom = self._settings_canvas.yview()
+            at_bottom = float(bottom) >= 0.999
+        except (ValueError, tk.TclError):
+            at_bottom = False
+        if at_bottom:
+            return len(self._sections) - 1
+        y = top_frac * inner_h   # 视口顶部在内容中的像素位置
+        for i, sec in enumerate(self._sections):
+            if sec.winfo_exists() and y < sec.winfo_y() + sec.winfo_height():
+                return i
+        return len(self._sections) - 1
 
     def _bind_section_wheel(self):
         """让分区内所有控件上的滚轮都滚动整个内容区 (文本框除外)。"""
@@ -1050,7 +1114,9 @@ class App:
 
     def _build_section_options(self):
         theme = THEMES['dark' if self.dark else 'light']
-        opt_frame = ttk.LabelFrame(self._settings_inner, text='还原选项', padding=8)
+        sec = ttk.Frame(self._settings_inner)
+        sec.pack(fill='x')
+        opt_frame = ttk.LabelFrame(sec, text='还原选项', padding=8)
         opt_frame.pack(fill='x')
         for i, key in enumerate(OPTION_ORDER):
             cell = ttk.Frame(opt_frame)
@@ -1063,12 +1129,15 @@ class App:
             self._switches.append(sw)
         for col in range(4):
             opt_frame.columnconfigure(col, weight=1)
-        ttk.Label(self._settings_inner,
-                  text='改动即时生效并自动保存。', foreground=theme['hint_fg']
+        ttk.Label(sec, text='改动即时生效并自动保存。', foreground=theme['hint_fg']
                   ).pack(anchor='w', pady=(8, 0))
+        return sec
 
     def _build_section_prefix(self):
-        pf_frame = ttk.LabelFrame(self._settings_inner, text='前后缀 (附加到输出结果)', padding=8)
+        theme = THEMES['dark' if self.dark else 'light']
+        sec = ttk.Frame(self._settings_inner)
+        sec.pack(fill='x')
+        pf_frame = ttk.LabelFrame(sec, text='前后缀 (附加到输出结果)', padding=8)
         pf_frame.pack(fill='x')
         ttk.Label(pf_frame, text='前缀 (支持多行):').pack(anchor='w')
         self.prefix_edit = tk.Text(pf_frame, height=3, font=TEXT_FONT, wrap='word')
@@ -1082,19 +1151,21 @@ class App:
         self.suffix_edit.insert('1.0', self.suffix_var.get())
         self.prefix_edit.bind('<KeyRelease>', self._on_prefix_edit)
         self.suffix_edit.bind('<KeyRelease>', self._on_suffix_edit)
-        theme = THEMES['dark' if self.dark else 'light']
-        ttk.Label(self._settings_inner,
-                  text='在主界面勾选"包含前缀 / 包含后缀"后附加到输出结果。',
+        ttk.Label(sec, text='在主界面勾选"包含前缀 / 包含后缀"后附加到输出结果。',
                   foreground=theme['hint_fg']).pack(anchor='w', pady=(8, 0))
+        return sec
 
     def _build_section_appearance(self):
         theme = THEMES['dark' if self.dark else 'light']
-        ttk.Label(self._settings_inner,
+        sec = ttk.Frame(self._settings_inner)
+        sec.pack(fill='x')
+        ttk.Label(sec,
                   text='输入框与输出框可分别设置字体、字号、替换字符颜色与高亮颜色。'
                        '颜色留空(点击"恢复默认")即跟随主题。',
                   foreground=theme['hint_fg'], wraplength=520).pack(anchor='w')
-        self._build_font_section(self._settings_inner, 'input', '输入框')
-        self._build_font_section(self._settings_inner, 'output', '输出框')
+        self._build_font_section(sec, 'input', '输入框')
+        self._build_font_section(sec, 'output', '输出框')
+        return sec
 
     def _theme_settings_dialog(self):
         """设置窗口中的 tk 控件 (导航/内容区/取色按钮) 跟随主题。"""
