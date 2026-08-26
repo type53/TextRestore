@@ -354,7 +354,10 @@ class Switch(tk.Canvas):
     """iOS 风格开关控件, 绑定 tk.BooleanVar, 点击切换并带动画。
 
     开启: 绿色轨道 + 白色圆点滑到右侧; 关闭: 灰色轨道 + 圆点滑到左侧。
+    边缘使用超采样抗锯齿渲染 (4x), 圆角平滑无锯齿。
     """
+
+    _SS = 4   # 超采样倍数
 
     def __init__(self, master, variable=None, command=None, dark=False,
                  width=46, height=26, pad=2, bg='#f0f0f0', **kw):
@@ -368,8 +371,10 @@ class Switch(tk.Canvas):
         self._pad = pad
         self._anim = None
         self._thumb_x = pad
-        self._items = None
-        self._thumb = None
+        self._photo = None
+        self._image_item = None
+        self._bg = self._parse_color(bg)
+        self._track_cov = None    # 轨道覆盖掩码缓存 (几何不变)
         if variable is not None:
             variable.trace_add('write', lambda *a: self._draw())
         self.bind('<Button-1>', self._on_click)
@@ -380,6 +385,7 @@ class Switch(tk.Canvas):
         self._dark = dark
         if bg:
             self.configure(bg=bg)
+            self._bg = self._parse_color(bg)
         self._draw()
 
     # ---------- 内部 ----------
@@ -398,30 +404,30 @@ class Switch(tk.Canvas):
             return SWITCH_ON_DARK if self._dark else SWITCH_ON
         return SWITCH_OFF_DARK if self._dark else SWITCH_OFF
 
-    def _thumb_size(self):
-        return self._height - 2 * self._pad
+    @staticmethod
+    def _parse_color(c):
+        c = c.lstrip('#')
+        return tuple(int(c[i:i + 2], 16) for i in (0, 2, 4))
 
-    def _place_thumb(self, x):
-        s = self._thumb_size()
-        self.coords(self._thumb, x, self._pad, x + s, self._pad + s)
+    @staticmethod
+    def _blend(bg, fg, cov):
+        return tuple(round(b + (f - b) * cov) for b, f in zip(bg, fg))
+
+    @staticmethod
+    def _in_pill(x, y, w, r, cy):
+        """点是否在胶囊轨道内 (中部矩形 + 两端半圆)。"""
+        if r <= x <= w - r:
+            return 0 <= y <= 2 * cy
+        cx = r if x < r else w - r
+        dx = x - cx
+        dy = y - cy
+        return dx * dx + dy * dy <= r * r
 
     def _draw(self):
-        color = self._track_color()
-        if self._items is None:
-            r = self._height / 2
-            self._items = [
-                self.create_rectangle(r, 0, self._width - r, self._height,
-                                      fill=color, outline=''),
-                self.create_oval(0, 0, 2 * r, self._height, fill=color, outline=''),
-                self.create_oval(self._width - 2 * r, 0, self._width, self._height,
-                                 fill=color, outline=''),
-            ]
-            self._thumb = self.create_oval(0, 0, 0, 0,
-                                           fill=SWITCH_THUMB, outline='')
-            self._place_thumb(self._pad)
-        else:
-            for item in self._items:
-                self.itemconfigure(item, fill=color)
+        if self._photo is None:
+            self._photo = tk.PhotoImage(width=self._width, height=self._height)
+            self._image_item = self.create_image(0, 0, image=self._photo,
+                                                 anchor='nw')
         target = self._width - self._height + self._pad if self._is_on() else self._pad
         if self._anim is not None:
             try:
@@ -432,7 +438,78 @@ class Switch(tk.Canvas):
         if target != self._thumb_x:
             self._animate(target)
         else:
-            self._place_thumb(target)
+            self._render(self._thumb_x)
+
+    def _render(self, thumb_x):
+        """超采样抗锯齿渲染当前帧到 PhotoImage。
+
+        注意: 当前 Tk 版本的 PhotoImage.put 按"列优先"放置像素,
+        每列最多放置 height 个, 因此按列逐次 put。
+        """
+        w, h = self._width, self._height
+        pad = self._pad
+        s = self._SS
+        inv = 1.0 / (s * s)
+        bg = self._bg
+        track_rgb = self._parse_color(self._track_color())
+        thumb_rgb = self._parse_color(SWITCH_THUMB)
+        cy = h / 2.0
+        r_thumb = (h - 2 * pad) / 2.0
+        cx = thumb_x + r_thumb
+
+        # 轨道覆盖掩码 (几何固定, 首次计算后缓存)
+        if self._track_cov is None:
+            r_track = h / 2.0
+            cov = []
+            for j in range(h):
+                row = []
+                for i in range(w):
+                    cnt = 0
+                    for sy in range(s):
+                        y = j + (sy + 0.5) / s
+                        for sx in range(s):
+                            x = i + (sx + 0.5) / s
+                            if self._in_pill(x, y, w, r_track, cy):
+                                cnt += 1
+                    row.append(cnt * inv)
+                cov.append(row)
+            self._track_cov = cov
+
+        # 拇指包围盒 (只在此范围内计算覆盖)
+        bx0 = max(0, int(cx - r_thumb - 1))
+        bx1 = min(w - 1, int(cx + r_thumb + 1))
+        by0 = max(0, int(cy - r_thumb - 1))
+        by1 = min(h - 1, int(cy + r_thumb + 1))
+        r2 = r_thumb * r_thumb
+
+        # 按列生成像素字符串, 每列一次 put
+        for i in range(w):
+            parts = []
+            for j in range(h):
+                t_cov = self._track_cov[j][i]
+                if bx0 <= i <= bx1 and by0 <= j <= by1:
+                    cnt = 0
+                    for sy in range(s):
+                        y = j + (sy + 0.5) / s
+                        for sx in range(s):
+                            x = i + (sx + 0.5) / s
+                            dx = x - cx
+                            dy = y - cy
+                            if dx * dx + dy * dy <= r2:
+                                cnt += 1
+                    u_cov = cnt * inv
+                else:
+                    u_cov = 0.0
+                if u_cov >= 1.0:
+                    c = thumb_rgb
+                elif t_cov <= 0.0:
+                    c = bg
+                else:
+                    c = self._blend(bg, track_rgb, t_cov)
+                    if u_cov > 0.0:
+                        c = self._blend(c, thumb_rgb, u_cov)
+                parts.append('#%02x%02x%02x' % c)
+            self._photo.put(' '.join(parts), to=(i, 0))
 
     def _animate(self, target):
         step = (target - self._thumb_x) / 8.0
@@ -442,10 +519,10 @@ class Switch(tk.Canvas):
             if step == 0 or (step > 0 and self._thumb_x >= target) \
                     or (step < 0 and self._thumb_x <= target):
                 self._thumb_x = target
-                self._place_thumb(target)
+                self._render(self._thumb_x)
                 self._anim = None
             else:
-                self._place_thumb(self._thumb_x)
+                self._render(self._thumb_x)
                 self._anim = self.after(12, tick)
 
         tick()
