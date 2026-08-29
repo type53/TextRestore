@@ -44,12 +44,16 @@ ChatGPT / Claude Code / Gemini 等模型有时会在输出中偷偷插入或替�
 """
 
 import os
+import sys
 import json
 import bisect
 import tkinter as tk
 import tkinter.font as tkfont
 from tkinter import ttk, colorchooser
 import unicodedata
+
+APP_DIR = os.path.dirname(os.path.abspath(__file__))
+ICON_PATH = os.path.join(APP_DIR, 'icon.ico')
 
 UI_FONT = ('Microsoft YaHei UI', 10)
 TEXT_FONT = ('Microsoft YaHei UI', 11)
@@ -794,8 +798,30 @@ class App:
         root.title(self.tr('app_title'))
         self._build_ui()
         self.apply_theme(self.dark)
+        self._apply_window_icon()
         self.input_text.focus_set()
         self.do_convert()
+
+    def _apply_window_icon(self):
+        """让窗口标题栏使用应用图标。
+
+        iconbitmap 负责 Windows 原生图标; iconphoto 用 PNG 双保险
+        (打包后从 _MEIPASS 读取捆绑的 icon_preview.png)。
+        """
+        try:
+            if getattr(sys, 'frozen', False):
+                self.root.iconbitmap(default=sys.executable)
+            else:
+                self.root.iconbitmap(ICON_PATH)
+        except tk.TclError:
+            pass
+        try:
+            png = os.path.join(getattr(sys, '_MEIPASS', APP_DIR),
+                               'icon_preview.png')
+            self._icon_photo = tk.PhotoImage(file=png)
+            self.root.iconphoto(True, self._icon_photo)
+        except tk.TclError:
+            pass
 
     def tr(self, key, **kw):
         """按当前语言取字符串, 支持 {name} 格式化。"""
@@ -1001,6 +1027,36 @@ class App:
                             arrowcolor=theme['text_fg'],
                             bordercolor=theme['root_bg'])
             style.map('TScrollbar', background=[('active', '#4a4a4a')])
+            # 下拉框 / 数字框: 暗色字段, 浅色文字 (否则白底浅字看不清)
+            style.configure('TCombobox',
+                            fieldbackground=theme['text_bg'],
+                            background=theme['root_bg'],
+                            foreground=theme['text_fg'],
+                            arrowcolor=theme['text_fg'],
+                            bordercolor='#3c3c3c',
+                            lightcolor='#3c3c3c', darkcolor='#3c3c3c')
+            style.map('TCombobox',
+                      fieldbackground=[('readonly', theme['text_bg'])],
+                      foreground=[('readonly', theme['text_fg'])],
+                      selectbackground=[('readonly', '#264f78')],
+                      selectforeground=[('readonly', '#ffffff')])
+            style.configure('TSpinbox',
+                            fieldbackground=theme['text_bg'],
+                            foreground=theme['text_fg'],
+                            arrowcolor=theme['text_fg'],
+                            bordercolor='#3c3c3c',
+                            lightcolor='#3c3c3c', darkcolor='#3c3c3c')
+            style.map('TSpinbox',
+                      fieldbackground=[('readonly', theme['text_bg'])],
+                      foreground=[('readonly', theme['text_fg'])])
+            # 下拉弹出列表 (Combobox popdown)
+            for opt, val in (
+                ('*TCombobox*Listbox.background', theme['text_bg']),
+                ('*TCombobox*Listbox.foreground', theme['text_fg']),
+                ('*TCombobox*Listbox.selectBackground', '#264f78'),
+                ('*TCombobox*Listbox.selectForeground', '#ffffff'),
+            ):
+                self.root.option_add(opt, val)
         self.root.configure(bg=theme['root_bg'])
         for w in (self.input_text, self.output_text):
             w.configure(bg=theme['text_bg'], fg=theme['text_fg'],
@@ -1122,6 +1178,13 @@ class App:
         win.geometry('720x540')
         win.minsize(600, 380)
         win.transient(self.root)
+        try:
+            if getattr(sys, 'frozen', False):
+                win.iconbitmap(default=sys.executable)
+            else:
+                win.iconbitmap(ICON_PATH)
+        except tk.TclError:
+            pass
 
         body = ttk.Frame(win)
         body.pack(fill='both', expand=True, padx=10, pady=10)
@@ -1314,14 +1377,14 @@ class App:
         theme = THEMES['dark' if self.dark else 'light']
         if self._settings_win is not None and self._settings_win.winfo_exists():
             self._settings_win.configure(bg=theme['root_bg'])
-        if self._settings_nav is not None:
+        if self._settings_nav is not None and self._settings_nav.winfo_exists():
             self._settings_nav.configure(
                 bg='#252526' if self.dark else '#f5f5f5',
                 fg=theme['text_fg'],
                 selectbackground='#264f78' if self.dark else '#c9e2ff',
                 selectforeground='#ffffff' if self.dark else '#000000',
                 highlightbackground=theme['root_bg'])
-        if self._settings_canvas is not None:
+        if self._settings_canvas is not None and self._settings_canvas.winfo_exists():
             self._settings_canvas.configure(bg=theme['root_bg'])
         for cb in self._color_buttons:
             if cb.winfo_exists():

@@ -56,8 +56,8 @@ def main():
 
     img.save('icon.ico', sizes=[(16, 16), (24, 24), (32, 32), (48, 48),
                                 (64, 64), (128, 128), (256, 256)])
-    # 同时输出 PNG 预览
-    img.resize((128, 128), Image.LANCZOS).save('icon_preview.png')
+    # 同时输出 256px PNG 预览 (运行时作为窗口图标, 打包时捆绑)
+    img.save('icon_preview.png')
     print('icon.ico + icon_preview.png generated')
 
 
