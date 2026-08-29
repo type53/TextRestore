@@ -51,12 +51,144 @@ import tkinter.font as tkfont
 from tkinter import ttk, colorchooser
 import unicodedata
 
-APP_TITLE = "隐蔽字符还原工具"
-APP_HINT = ("把模型输出粘贴到上方输入框, 下方输出框会自动给出还原后的文本。"
-            "全角、中文标点、花体字母、上下标、相似字母、不可见字符等都会被还原为普通英文字符。")
-
 UI_FONT = ('Microsoft YaHei UI', 10)
 TEXT_FONT = ('Microsoft YaHei UI', 11)
+
+# ---------------- 国际化 (中文 / English) ----------------
+
+STRINGS = {
+    'zh': {
+        'app_title': '隐蔽字符还原工具',
+        'hint': ('把模型输出粘贴到上方输入框, 下方输出框会自动给出还原后的文本。'
+                 '全角、中文标点、花体字母、上下标、相似字母、不可见字符等都会被还原为普通英文字符。'),
+        'input_label': '输入(自动转换):',
+        'output_label': '输出(转换结果):',
+        'status_ready': '就绪。',
+        'status_restored': '已还原 {total} 个字符 — {parts}',
+        'status_none': '未发现需要还原的字符。',
+        'status_copied': '已复制到剪贴板 ✓',
+        'status_empty': '输出为空, 没有可复制的内容。',
+        'btn_copy': '复制结果',
+        'btn_clear': '清空输入',
+        'btn_settings': '设置',
+        'btn_done': '完成',
+        'theme_dark': '深色主题',
+        'theme_light': '浅色主题',
+        'include_prefix': '包含前缀',
+        'include_suffix': '包含后缀',
+        'legend_red': '■ 输入中被替换的字符',
+        'legend_green': '■ 输出中还原后的字符',
+        'nav_options': '还原选项',
+        'nav_prefix': '前后缀',
+        'nav_appearance': '外观',
+        'sec_options': '还原选项',
+        'sec_prefix': '前后缀 (附加到输出结果)',
+        'opt_hint': '改动即时生效并自动保存。',
+        'prefix_label': '前缀 (支持多行):',
+        'suffix_label': '后缀 (支持多行):',
+        'prefix_hint': '在主界面勾选"包含前缀 / 包含后缀"后附加到输出结果。',
+        'appearance_hint': ('输入框与输出框可分别设置字体、字号、替换字符颜色与高亮颜色。'
+                            '颜色留空(点击"恢复默认")即跟随主题。'),
+        'font_label': '字体:',
+        'size_label': '字号:',
+        'diff_color_label': '替换字符颜色:',
+        'hl_color_label': '高亮颜色:',
+        'fg': '前景',
+        'bg': '背景',
+        'reset': '恢复默认 (跟随主题)',
+        'input_box': '输入框',
+        'output_box': '输出框',
+        'lang_label': '语言:',
+        'opt_fullwidth': '全角转半角',
+        'opt_punct': '中文标点',
+        'opt_math': '花体字体',
+        'opt_super': '上下标',
+        'opt_homoglyph': '相似字母',
+        'opt_invisible': '不可见字符',
+        'opt_space': '特殊空格',
+        'opt_trailing': '删除末尾换行',
+        'stat_fullwidth': '全角',
+        'stat_punct': '标点',
+        'stat_math': '花体',
+        'stat_super': '上下标',
+        'stat_homoglyph': '相似',
+        'stat_invisible': '不可见',
+        'stat_space': '空格',
+        'stat_trailing': '末尾换行',
+    },
+    'en': {
+        'app_title': 'TextRestore – Hidden Character Restorer',
+        'hint': ('Paste model output into the top box; the restored text appears below. '
+                 'Fullwidth, Chinese punctuation, math fonts, super/subscripts, homoglyphs '
+                 'and invisible characters are converted back to normal English characters.'),
+        'input_label': 'Input (auto-convert):',
+        'output_label': 'Output (result):',
+        'status_ready': 'Ready.',
+        'status_restored': 'Restored {total} characters — {parts}',
+        'status_none': 'No hidden characters found.',
+        'status_copied': 'Copied to clipboard ✓',
+        'status_empty': 'Output is empty, nothing to copy.',
+        'btn_copy': 'Copy',
+        'btn_clear': 'Clear',
+        'btn_settings': 'Settings',
+        'btn_done': 'Done',
+        'theme_dark': 'Dark',
+        'theme_light': 'Light',
+        'include_prefix': 'Include prefix',
+        'include_suffix': 'Include suffix',
+        'legend_red': '■ Replaced in input',
+        'legend_green': '■ Restored in output',
+        'nav_options': 'Options',
+        'nav_prefix': 'Prefix & Suffix',
+        'nav_appearance': 'Appearance',
+        'sec_options': 'Conversion Options',
+        'sec_prefix': 'Prefix & Suffix (appended to output)',
+        'opt_hint': 'Changes apply immediately and are saved automatically.',
+        'prefix_label': 'Prefix (multi-line):',
+        'suffix_label': 'Suffix (multi-line):',
+        'prefix_hint': 'Enable "Include prefix / Include suffix" on the main window to append them.',
+        'appearance_hint': ('Set font, size, replaced-character colors and highlight colors for '
+                            'the input and output boxes separately. Leave a color empty '
+                            '(click "Reset to theme default") to follow the theme.'),
+        'font_label': 'Font:',
+        'size_label': 'Size:',
+        'diff_color_label': 'Replaced char color:',
+        'hl_color_label': 'Highlight color:',
+        'fg': 'FG',
+        'bg': 'BG',
+        'reset': 'Reset to theme default',
+        'input_box': 'Input box',
+        'output_box': 'Output box',
+        'lang_label': 'Language:',
+        'opt_fullwidth': 'Fullwidth',
+        'opt_punct': 'Chinese punct.',
+        'opt_math': 'Math fonts',
+        'opt_super': 'Super/Sub',
+        'opt_homoglyph': 'Homoglyphs',
+        'opt_invisible': 'Invisible',
+        'opt_space': 'Special spaces',
+        'opt_trailing': 'Trailing NL',
+        'stat_fullwidth': 'fullwidth',
+        'stat_punct': 'punct',
+        'stat_math': 'math',
+        'stat_super': 'super',
+        'stat_homoglyph': 'glyph',
+        'stat_invisible': 'invisible',
+        'stat_space': 'spaces',
+        'stat_trailing': 'newline',
+    },
+}
+
+
+def _detect_lang():
+    """按系统区域自动选择默认语言。"""
+    try:
+        import locale
+        lang, _ = locale.getdefaultlocale()
+    except Exception:
+        lang = ''
+    return 'zh' if (lang or '').lower().startswith('zh') else 'en'
+
 
 # ---------------- 字符映射表 ----------------
 
@@ -187,28 +319,6 @@ MAPPINGS = {
     'homoglyph': HOMOGLYPH_MAP,
     'invisible': INVISIBLE_MAP,
     'space': SPACE_MAP,
-}
-
-CHECK_LABELS = {
-    'fullwidth': '全角转半角',
-    'punct': '中文标点',
-    'math': '花体字体',
-    'super': '上下标',
-    'homoglyph': '相似字母',
-    'invisible': '不可见字符',
-    'space': '特殊空格',
-    'trailing': '删除末尾换行',
-}
-
-STATUS_NAMES = {
-    'fullwidth': '全角',
-    'punct': '标点',
-    'math': '花体',
-    'super': '上下标',
-    'homoglyph': '相似',
-    'invisible': '不可见',
-    'space': '空格',
-    'trailing': '末尾换行',
 }
 
 # 界面上的选项顺序 (trailing 在 convert_text 中单独处理, 不在 MAPPINGS 里)
@@ -638,7 +748,6 @@ def _save_config(cfg):
 class App:
     def __init__(self, root):
         self.root = root
-        root.title(APP_TITLE)
         root.geometry('820x680')
         root.minsize(640, 320)
         self._status_after = None
@@ -657,6 +766,9 @@ class App:
         self._nav_current = -1
         cfg = _load_config()
         self.dark = bool(cfg.get('dark', False))
+        self.lang = cfg.get('lang') or _detect_lang()
+        if self.lang not in STRINGS:
+            self.lang = 'zh'
         self.prefix_var = tk.StringVar(value=cfg.get('prefix', ''))
         self.suffix_var = tk.StringVar(value=cfg.get('suffix', ''))
         self.include_prefix = tk.BooleanVar(value=bool(cfg.get('include_prefix', False)))
@@ -679,10 +791,22 @@ class App:
                 'hl_bg': tk.StringVar(value=fc.get('hl_bg') or ''),
             }
         self._font_list = None   # 懒加载系统字体列表
+        root.title(self.tr('app_title'))
         self._build_ui()
         self.apply_theme(self.dark)
         self.input_text.focus_set()
         self.do_convert()
+
+    def tr(self, key, **kw):
+        """按当前语言取字符串, 支持 {name} 格式化。"""
+        s = STRINGS.get(self.lang, STRINGS['zh']).get(
+            key, STRINGS['zh'].get(key, key))
+        if kw:
+            try:
+                return s.format(**kw)
+            except (KeyError, IndexError, ValueError):
+                return s
+        return s
 
     def _build_ui(self):
         main = ttk.Frame(self.root, padding=10)
@@ -692,22 +816,22 @@ class App:
         main.columnconfigure(0, weight=1)
 
         # ---- 顶部提示 + 图例 ----
-        self.hint_label = ttk.Label(main, text=APP_HINT, foreground='#667',
+        self.hint_label = ttk.Label(main, text=self.tr('hint'), foreground='#667',
                                     wraplength=760)
         self.hint_label.grid(row=0, column=0, sticky='w')
         legend = ttk.Frame(main)
         legend.grid(row=1, column=0, sticky='w', pady=(2, 0))
-        self.legend_red = ttk.Label(legend, text='■ 输入中被替换的字符',
+        self.legend_red = ttk.Label(legend, text=self.tr('legend_red'),
                                     foreground='#c0392b')
         self.legend_red.pack(side='left')
         ttk.Label(legend, text='   ', foreground='#667').pack(side='left')
-        self.legend_green = ttk.Label(legend, text='■ 输出中还原后的字符',
+        self.legend_green = ttk.Label(legend, text=self.tr('legend_green'),
                                       foreground='#1e8449')
         self.legend_green.pack(side='left')
 
         # ---- 输入区 ----
-        ttk.Label(main, text='输入(自动转换):').grid(row=2, column=0,
-                                                    sticky='w', pady=(8, 2))
+        self.input_label = ttk.Label(main, text=self.tr('input_label'))
+        self.input_label.grid(row=2, column=0, sticky='w', pady=(8, 2))
         in_frame = ttk.Frame(main)
         in_frame.grid(row=3, column=0, sticky='nsew')
         self.input_text = tk.Text(in_frame, height=8, font=TEXT_FONT,
@@ -718,8 +842,8 @@ class App:
         self.in_scroll.pack(side='right', fill='y')
 
         # ---- 输出区 ----
-        ttk.Label(main, text='输出(转换结果):').grid(row=4, column=0,
-                                                    sticky='w', pady=(0, 2))
+        self.output_label = ttk.Label(main, text=self.tr('output_label'))
+        self.output_label.grid(row=4, column=0, sticky='w', pady=(0, 2))
         out_frame = ttk.Frame(main)
         out_frame.grid(row=5, column=0, sticky='nsew')
         self.output_text = tk.Text(out_frame, height=8, font=TEXT_FONT,
@@ -743,7 +867,7 @@ class App:
         self.output_text.bind('<Key>', self._readonly_block)
 
         # ---- 状态信息 (独占一行) ----
-        self.status_var = tk.StringVar(value='就绪。')
+        self.status_var = tk.StringVar(value=self.tr('status_ready'))
         self.status_label = ttk.Label(main, textvariable=self.status_var,
                                       foreground='#1a6fb0')
         self.status_label.grid(row=6, column=0, sticky='w', pady=(10, 0))
@@ -751,21 +875,30 @@ class App:
         # ---- 底部: 复制/清空/设置 + 前后缀开关 + 主题 ----
         bottom = ttk.Frame(main)
         bottom.grid(row=7, column=0, sticky='ew', pady=(6, 0))
-        ttk.Button(bottom, text='复制结果', command=self.copy_result).pack(side='left')
-        ttk.Button(bottom, text='清空输入', command=self.clear_input).pack(side='left', padx=8)
-        ttk.Button(bottom, text='设置', command=self.open_settings).pack(side='left')
-        ttk.Label(bottom, text='包含前缀').pack(side='left', padx=(16, 4))
+        self.btn_copy = ttk.Button(bottom, text=self.tr('btn_copy'),
+                                   command=self.copy_result)
+        self.btn_copy.pack(side='left')
+        self.btn_clear = ttk.Button(bottom, text=self.tr('btn_clear'),
+                                    command=self.clear_input)
+        self.btn_clear.pack(side='left', padx=8)
+        self.btn_settings = ttk.Button(bottom, text=self.tr('btn_settings'),
+                                       command=self.open_settings)
+        self.btn_settings.pack(side='left')
+        self.prefix_label = ttk.Label(bottom, text=self.tr('include_prefix'))
+        self.prefix_label.pack(side='left', padx=(16, 4))
         sw1 = Switch(bottom, variable=self.include_prefix,
                      command=self._on_setting_changed, dark=self.dark,
                      bg=THEMES['dark' if self.dark else 'light']['root_bg'])
         sw1.pack(side='left')
-        ttk.Label(bottom, text='包含后缀').pack(side='left', padx=(16, 4))
+        self.suffix_label = ttk.Label(bottom, text=self.tr('include_suffix'))
+        self.suffix_label.pack(side='left', padx=(16, 4))
         sw2 = Switch(bottom, variable=self.include_suffix,
                      command=self._on_setting_changed, dark=self.dark,
                      bg=THEMES['dark' if self.dark else 'light']['root_bg'])
         sw2.pack(side='left')
         self._switches.extend([sw1, sw2])
-        self.theme_btn = ttk.Button(bottom, text='深色主题', command=self.toggle_theme)
+        self.theme_btn = ttk.Button(bottom, text=self.tr('theme_dark'),
+                                    command=self.toggle_theme)
         self.theme_btn.pack(side='right', padx=(0, 8))
 
         # 输入内容变化时自动转换
@@ -876,7 +1009,7 @@ class App:
                         highlightthickness=1)
         self.status_label.configure(foreground=theme['status_fg'])
         self.hint_label.configure(foreground=theme['hint_fg'])
-        self.theme_btn.configure(text='浅色主题' if dark else '深色主题')
+        self.theme_btn.configure(text=self.tr('theme_light' if dark else 'theme_dark'))
         # 字体/字号/标记颜色/高亮颜色 (主题默认 + 用户自定义覆盖)
         self._apply_appearance()
         # 所有开关控件跟随主题
@@ -985,7 +1118,7 @@ class App:
             return
         theme = THEMES['dark' if self.dark else 'light']
         win = tk.Toplevel(self.root)
-        win.title('设置')
+        win.title(self.tr('btn_settings'))
         win.geometry('720x540')
         win.minsize(600, 380)
         win.transient(self.root)
@@ -1000,10 +1133,7 @@ class App:
             sidebar, width=11, activestyle='none', exportselection=False,
             relief='flat', bd=0, highlightthickness=0, font=UI_FONT)
         self._settings_nav.pack(side='left', fill='y')
-        for name in ('还原选项', '前后缀', '外观'):
-            self._settings_nav.insert('end', name)
         self._settings_nav.bind('<<ListboxSelect>>', self._on_nav_select)
-        self._settings_nav.selection_set(0)
 
         # ---- 右侧滚动内容区 (所有分区堆叠在同一滚动区域) ----
         self._settings_scroll = ScrollableFrame(body)
@@ -1013,7 +1143,7 @@ class App:
         # 滚动位置变化时: 更新滑块 + 反向同步导航选中状态 (scrollspy)
         self._settings_canvas.configure(yscrollcommand=self._on_settings_view)
 
-        ttk.Button(win, text='完成', command=win.destroy).pack(anchor='e', padx=10, pady=(0, 10))
+        ttk.Button(win, text=self.tr('btn_done'), command=win.destroy).pack(anchor='e', padx=10, pady=(0, 10))
 
         self._settings_win = win
         self._theme_settings_dialog()
@@ -1035,6 +1165,10 @@ class App:
         """把所有分区一次性构建到同一个滚动内容区中。"""
         for w in self._settings_inner.winfo_children():
             w.destroy()
+        # 重建左侧导航标签 (语言可能已切换)
+        self._settings_nav.delete(0, 'end')
+        for key in ('nav_options', 'nav_prefix', 'nav_appearance'):
+            self._settings_nav.insert('end', self.tr(key))
         self._sections = []
         self._sections.append(self._build_section_options())
         self._sections.append(self._build_section_prefix())
@@ -1116,7 +1250,7 @@ class App:
         theme = THEMES['dark' if self.dark else 'light']
         sec = ttk.Frame(self._settings_inner)
         sec.pack(fill='x')
-        opt_frame = ttk.LabelFrame(sec, text='还原选项', padding=8)
+        opt_frame = ttk.LabelFrame(sec, text=self.tr('sec_options'), padding=8)
         opt_frame.pack(fill='x')
         for i, key in enumerate(OPTION_ORDER):
             cell = ttk.Frame(opt_frame)
@@ -1125,33 +1259,43 @@ class App:
                         command=self._on_setting_changed, dark=self.dark,
                         width=40, height=22, bg=theme['root_bg'])
             sw.pack(side='left')
-            ttk.Label(cell, text=CHECK_LABELS[key]).pack(side='left', padx=(6, 0))
+            ttk.Label(cell, text=self.tr(f'opt_{key}')).pack(side='left', padx=(6, 0))
             self._switches.append(sw)
         for col in range(4):
             opt_frame.columnconfigure(col, weight=1)
-        ttk.Label(sec, text='改动即时生效并自动保存。', foreground=theme['hint_fg']
+        ttk.Label(sec, text=self.tr('opt_hint'), foreground=theme['hint_fg']
                   ).pack(anchor='w', pady=(8, 0))
+        # 语言切换
+        lang_row = ttk.Frame(sec)
+        lang_row.pack(fill='x', pady=(12, 0))
+        ttk.Label(lang_row, text=self.tr('lang_label')).pack(side='left')
+        lang_cb = ttk.Combobox(lang_row, values=('中文', 'English'),
+                               width=10, state='readonly')
+        lang_cb.set('English' if self.lang == 'en' else '中文')
+        lang_cb.pack(side='left', padx=(6, 0))
+        lang_cb.bind('<<ComboboxSelected>>',
+                     lambda e: self._on_lang_change(lang_cb.get()))
         return sec
 
     def _build_section_prefix(self):
         theme = THEMES['dark' if self.dark else 'light']
         sec = ttk.Frame(self._settings_inner)
         sec.pack(fill='x')
-        pf_frame = ttk.LabelFrame(sec, text='前后缀 (附加到输出结果)', padding=8)
+        pf_frame = ttk.LabelFrame(sec, text=self.tr('sec_prefix'), padding=8)
         pf_frame.pack(fill='x')
-        ttk.Label(pf_frame, text='前缀 (支持多行):').pack(anchor='w')
+        ttk.Label(pf_frame, text=self.tr('prefix_label')).pack(anchor='w')
         self.prefix_edit = tk.Text(pf_frame, height=3, font=TEXT_FONT, wrap='word')
         self._apply_text_widget_theme(self.prefix_edit)
         self.prefix_edit.pack(fill='x')
         self.prefix_edit.insert('1.0', self.prefix_var.get())
-        ttk.Label(pf_frame, text='后缀 (支持多行):').pack(anchor='w', pady=(6, 0))
+        ttk.Label(pf_frame, text=self.tr('suffix_label')).pack(anchor='w', pady=(6, 0))
         self.suffix_edit = tk.Text(pf_frame, height=3, font=TEXT_FONT, wrap='word')
         self._apply_text_widget_theme(self.suffix_edit)
         self.suffix_edit.pack(fill='x')
         self.suffix_edit.insert('1.0', self.suffix_var.get())
         self.prefix_edit.bind('<KeyRelease>', self._on_prefix_edit)
         self.suffix_edit.bind('<KeyRelease>', self._on_suffix_edit)
-        ttk.Label(sec, text='在主界面勾选"包含前缀 / 包含后缀"后附加到输出结果。',
+        ttk.Label(sec, text=self.tr('prefix_hint'),
                   foreground=theme['hint_fg']).pack(anchor='w', pady=(8, 0))
         return sec
 
@@ -1159,12 +1303,10 @@ class App:
         theme = THEMES['dark' if self.dark else 'light']
         sec = ttk.Frame(self._settings_inner)
         sec.pack(fill='x')
-        ttk.Label(sec,
-                  text='输入框与输出框可分别设置字体、字号、替换字符颜色与高亮颜色。'
-                       '颜色留空(点击"恢复默认")即跟随主题。',
+        ttk.Label(sec, text=self.tr('appearance_hint'),
                   foreground=theme['hint_fg'], wraplength=520).pack(anchor='w')
-        self._build_font_section(sec, 'input', '输入框')
-        self._build_font_section(sec, 'output', '输出框')
+        self._build_font_section(sec, 'input', self.tr('input_box'))
+        self._build_font_section(sec, 'output', self.tr('output_box'))
         return sec
 
     def _theme_settings_dialog(self):
@@ -1194,21 +1336,21 @@ class App:
         fv = self.font_vars[key]
         set_val = lambda field, w: lambda e=None: self._set_font_val(key, field, w.get())
 
-        ttk.Label(frame, text='字体:').grid(row=0, column=0, sticky='w')
+        ttk.Label(frame, text=self.tr('font_label')).grid(row=0, column=0, sticky='w')
         cb = ttk.Combobox(frame, values=self._font_list_cached(), width=30)
         cb.set(fv['family'].get())
         cb.grid(row=0, column=1, columnspan=2, sticky='we', padx=(6, 0))
         cb.bind('<<ComboboxSelected>>', set_val('family', cb))
         cb.bind('<KeyRelease>', set_val('family', cb))
 
-        ttk.Label(frame, text='字号:').grid(row=1, column=0, sticky='w', pady=(6, 0))
+        ttk.Label(frame, text=self.tr('size_label')).grid(row=1, column=0, sticky='w', pady=(6, 0))
         sp = ttk.Spinbox(frame, from_=8, to=36, width=6)
         sp.set(fv['size'].get())
         sp.grid(row=1, column=1, sticky='w', padx=(6, 0), pady=(6, 0))
         sp.configure(command=set_val('size', sp))
         sp.bind('<KeyRelease>', set_val('size', sp))
 
-        ttk.Label(frame, text='替换字符颜色:').grid(row=2, column=0, sticky='w', pady=(6, 0))
+        ttk.Label(frame, text=self.tr('diff_color_label')).grid(row=2, column=0, sticky='w', pady=(6, 0))
 
         def make_cb(kind, label):
             cb = ColorButton(frame, label, fv[kind],
@@ -1218,14 +1360,14 @@ class App:
             self._color_buttons.append(cb)
             return cb
 
-        make_cb('diff_fg', '前景').grid(row=2, column=1, sticky='w', padx=(6, 0), pady=(6, 0))
-        make_cb('diff_bg', '背景').grid(row=2, column=2, sticky='w', padx=(6, 0), pady=(6, 0))
+        make_cb('diff_fg', self.tr('fg')).grid(row=2, column=1, sticky='w', padx=(6, 0), pady=(6, 0))
+        make_cb('diff_bg', self.tr('bg')).grid(row=2, column=2, sticky='w', padx=(6, 0), pady=(6, 0))
 
-        ttk.Label(frame, text='高亮颜色:').grid(row=3, column=0, sticky='w', pady=(6, 0))
-        make_cb('hl_fg', '前景').grid(row=3, column=1, sticky='w', padx=(6, 0), pady=(6, 0))
-        make_cb('hl_bg', '背景').grid(row=3, column=2, sticky='w', padx=(6, 0), pady=(6, 0))
+        ttk.Label(frame, text=self.tr('hl_color_label')).grid(row=3, column=0, sticky='w', pady=(6, 0))
+        make_cb('hl_fg', self.tr('fg')).grid(row=3, column=1, sticky='w', padx=(6, 0), pady=(6, 0))
+        make_cb('hl_bg', self.tr('bg')).grid(row=3, column=2, sticky='w', padx=(6, 0), pady=(6, 0))
 
-        ttk.Button(frame, text='恢复默认 (跟随主题)',
+        ttk.Button(frame, text=self.tr('reset'),
                    command=lambda: self._reset_box_colors(key)).grid(
             row=4, column=0, columnspan=3, sticky='w', pady=(8, 0))
 
@@ -1249,6 +1391,38 @@ class App:
         self._save_settings()
         self.do_convert()
 
+    # ---------- 语言切换 ----------
+    def _on_lang_change(self, value):
+        new = 'en' if value == 'English' else 'zh'
+        if new == self.lang:
+            return
+        self.lang = new
+        self._save_settings()
+        self.apply_language()
+
+    def apply_language(self):
+        """应用当前语言到主界面与设置窗口。"""
+        self._apply_ui_texts()
+        self.status_var.set(self.tr('status_ready'))
+        if self._settings_win is not None and self._settings_win.winfo_exists():
+            self._build_all_sections()
+        self.do_convert()
+
+    def _apply_ui_texts(self):
+        self.root.title(self.tr('app_title'))
+        self.hint_label.configure(text=self.tr('hint'))
+        self.legend_red.configure(text=self.tr('legend_red'))
+        self.legend_green.configure(text=self.tr('legend_green'))
+        self.input_label.configure(text=self.tr('input_label'))
+        self.output_label.configure(text=self.tr('output_label'))
+        self.btn_copy.configure(text=self.tr('btn_copy'))
+        self.btn_clear.configure(text=self.tr('btn_clear'))
+        self.btn_settings.configure(text=self.tr('btn_settings'))
+        self.prefix_label.configure(text=self.tr('include_prefix'))
+        self.suffix_label.configure(text=self.tr('include_suffix'))
+        self.theme_btn.configure(
+            text=self.tr('theme_light' if self.dark else 'theme_dark'))
+
     def _save_settings(self):
         fonts = {}
         for key in ('input', 'output'):
@@ -1267,6 +1441,7 @@ class App:
             }
         _save_config({
             'dark': self.dark,
+            'lang': self.lang,
             'prefix': self.prefix_var.get(),
             'suffix': self.suffix_var.get(),
             'include_prefix': self.include_prefix.get(),
@@ -1403,11 +1578,11 @@ class App:
             self.output_text.tag_add('green', f'1.0+{s + plen}c', f'1.0+{e + plen}c')
         total = sum(counts.values())
         if total:
-            parts = ' · '.join(f'{STATUS_NAMES[k]} {v}'
+            parts = ' · '.join(f'{self.tr(f"stat_{k}")} {v}'
                                for k, v in counts.items() if v)
-            self.status_var.set(f'已还原 {total} 个字符 — {parts}')
+            self.status_var.set(self.tr('status_restored', total=total, parts=parts))
         else:
-            self.status_var.set('未发现需要还原的字符。')
+            self.status_var.set(self.tr('status_none'))
         # 输出内容刷新后, 滚动位置对齐到输入框 (键盘翻页等场景)
         self.root.after_idle(self._sync_output_view)
         # 若存在选区, 重新生成联动高亮
@@ -1418,11 +1593,11 @@ class App:
     def copy_result(self):
         content = self.output_text.get('1.0', 'end-1c')
         if not content:
-            self._flash('输出为空, 没有可复制的内容。')
+            self._flash(self.tr('status_empty'))
             return
         self.root.clipboard_clear()
         self.root.clipboard_append(content)
-        self._flash('已复制到剪贴板 ✓')
+        self._flash(self.tr('status_copied'))
 
     def clear_input(self):
         self.input_text.delete('1.0', 'end')

@@ -1,5 +1,9 @@
 # -*- coding: utf-8 -*-
-"""生成应用图标 icon.ico (仅打包时需要, 需要 Pillow)。"""
+"""生成应用图标 icon.ico (仅打包时需要, 需要 Pillow)。
+
+设计: 靛蓝->紫渐变圆角方块, 中央大字母 A 左半红(被替换)右半绿(已还原),
+寓意"隐蔽字符 -> 正常字符"的还原过程。
+"""
 import os
 
 from PIL import Image, ImageDraw, ImageFont
@@ -8,44 +12,53 @@ SIZE = 256
 
 
 def main():
-    img = Image.new('RGBA', (SIZE, SIZE), (0, 0, 0, 0))
-    d = ImageDraw.Draw(img)
+    # ---- 背景: 对角渐变 ----
+    c1 = (74, 108, 247)    # #4A6CF7 靛蓝
+    c2 = (124, 77, 255)    # #7C4DFF 紫
+    g = Image.new('RGBA', (2, 2))
+    g.putpixel((0, 0), c1)
+    g.putpixel((1, 0), c1)
+    g.putpixel((0, 1), c2)
+    g.putpixel((1, 1), c2)
+    grad = g.resize((SIZE, SIZE), Image.BILINEAR)
 
-    # 圆角矩形 + 竖向渐变背景
-    top = (74, 108, 247)
-    bottom = (47, 84, 210)
-    for y in range(SIZE):
-        t = y / (SIZE - 1)
-        color = tuple(int(top[i] + (bottom[i] - top[i]) * t) for i in range(3)) + (255,)
-        d.line([(0, y), (SIZE, y)], fill=color)
-
+    # 圆角矩形遮罩
     mask = Image.new('L', (SIZE, SIZE), 0)
-    md = ImageDraw.Draw(mask)
-    md.rounded_rectangle([8, 8, SIZE - 8, SIZE - 8], radius=52, fill=255)
+    ImageDraw.Draw(mask).rounded_rectangle(
+        [10, 10, SIZE - 10, SIZE - 10], radius=58, fill=255)
+    img = grad.copy()
     img.putalpha(mask)
-    d = ImageDraw.Draw(img)
 
-    # 白色字母 A
+    # ---- 中央字母 A: 左红右绿 ----
     font = None
-    for path in (r'C:\Windows\Fonts\arialbd.ttf', r'C:\Windows\Fonts\seguisb.ttf'):
+    for path in (r'C:\Windows\Fonts\arialbd.ttf',
+                 r'C:\Windows\Fonts\seguisb.ttf'):
         if os.path.exists(path):
-            font = ImageFont.truetype(path, 150)
+            font = ImageFont.truetype(path, 165)
             break
     if font is None:
-        font = ImageFont.load_default(size=160)
-    bbox = d.textbbox((0, 0), 'A', font=font)
-    w, h = bbox[2] - bbox[0], bbox[3] - bbox[1]
-    d.text(((SIZE - w) / 2 - bbox[0], (SIZE - h) / 2 - bbox[1]),
-           'A', font=font, fill=(255, 255, 255, 255))
+        font = ImageFont.load_default(size=170)
 
-    # 右下角绿色对勾
-    d.ellipse([172, 172, 236, 236], fill=(46, 204, 113, 255))
-    d.line([(186, 204), (197, 215), (222, 189)], fill=(255, 255, 255, 255),
-           width=12, joint='curve')
+    amask = Image.new('L', (SIZE, SIZE), 0)
+    ImageDraw.Draw(amask).text((SIZE / 2, SIZE / 2), 'A', font=font,
+                               fill=255, anchor='mm')
+
+    half = SIZE // 2
+    left = amask.crop((0, 0, half, SIZE))
+    right = amask.crop((half, 0, SIZE, SIZE))
+    img.paste((255, 95, 86, 255), (0, 0), left)       # 红: 被替换
+    img.paste((46, 213, 115, 255), (half, 0), right)  # 绿: 已还原
+
+    # ---- 中央分隔细线 (半透明白) ----
+    d = ImageDraw.Draw(img)
+    for y in range(38, SIZE - 38):
+        d.point((half, y), fill=(255, 255, 255, 150))
 
     img.save('icon.ico', sizes=[(16, 16), (24, 24), (32, 32), (48, 48),
                                 (64, 64), (128, 128), (256, 256)])
-    print('icon.ico generated')
+    # 同时输出 PNG 预览
+    img.resize((128, 128), Image.LANCZOS).save('icon_preview.png')
+    print('icon.ico + icon_preview.png generated')
 
 
 if __name__ == '__main__':
