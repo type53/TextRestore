@@ -5,7 +5,7 @@ a = Analysis(
     ['text_restore.py'],
     pathex=[],
     binaries=[],
-    datas=[],
+    datas=[('icon_preview.png', '.')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
