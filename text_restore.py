@@ -29,6 +29,7 @@ ChatGPT / Claude Code / Gemini 等模型有时会在输出中偷偷插入或替�
     6. 删除不可见字符  : 零宽空格/连接符/BOM/双向控制符等
     7. 特殊空格归一    : 不间断空格/窄空格 -> 普通空格
     8. 删除末尾换行    : 输入末尾多余的 \n / \r 不会出现在输出中
+    9. 日期时间格式    : 2024年1月5日下午3点 -> 2024-01-05 15:00
 
 其他特性:
     * diff 高亮: 输入框中被替换的字符飘红, 输出框中还原后的字符飘绿
@@ -47,6 +48,7 @@ import os
 import sys
 import json
 import bisect
+import re
 import tkinter as tk
 import tkinter.font as tkfont
 from tkinter import ttk, colorchooser
@@ -111,6 +113,7 @@ STRINGS = {
         'opt_invisible': '不可见字符',
         'opt_space': '特殊空格',
         'opt_trailing': '删除末尾换行',
+        'opt_datetime': '日期时间格式',
         'stat_fullwidth': '全角',
         'stat_punct': '标点',
         'stat_math': '花体',
@@ -119,6 +122,7 @@ STRINGS = {
         'stat_invisible': '不可见',
         'stat_space': '空格',
         'stat_trailing': '末尾换行',
+        'stat_datetime': '日期时间',
     },
     'en': {
         'app_title': 'TextRestore – Hidden Character Restorer',
@@ -172,6 +176,7 @@ STRINGS = {
         'opt_invisible': 'Invisible',
         'opt_space': 'Special spaces',
         'opt_trailing': 'Trailing NL',
+        'opt_datetime': 'Date & time',
         'stat_fullwidth': 'fullwidth',
         'stat_punct': 'punct',
         'stat_math': 'math',
@@ -180,6 +185,7 @@ STRINGS = {
         'stat_invisible': 'invisible',
         'stat_space': 'spaces',
         'stat_trailing': 'newline',
+        'stat_datetime': 'datetime',
     },
 }
 
@@ -325,8 +331,168 @@ MAPPINGS = {
     'space': SPACE_MAP,
 }
 
-# 界面上的选项顺序 (trailing 在 convert_text 中单独处理, 不在 MAPPINGS 里)
-OPTION_ORDER = list(MAPPINGS) + ['trailing']
+# 界面上的选项顺序 (trailing / datetime 在 convert_text 中单独处理, 不在 MAPPINGS 里)
+OPTION_ORDER = list(MAPPINGS) + ['trailing', 'datetime']
+
+# ---------------- 日期时间格式还原 (中文 -> 标准英文格式) ----------------
+# 识别 2024年1月5日 / 1月5号 / 下午3点15分 / 二零二四年 等中文格式,
+# 转换为 ISO 8601 风格: 2024-01-05 15:15
+
+_CN_DIGITS = {'零': 0, '〇': 0, '一': 1, '二': 2, '两': 2, '三': 3, '四': 4,
+              '五': 5, '六': 6, '七': 7, '八': 8, '九': 9}
+_NUM = r'(?:\d{1,4}|[零〇一二两三四五六七八九十百千]{1,8})'
+_AP = r'凌晨|清晨|早上|上午|中午|正午|下午|傍晚|晚上|深夜|晚'
+
+_RE_DATETIME = re.compile(
+    r'(?P<ap1>' + _AP + r')?\s*(?<!\d)(?P<y>' + _NUM + r')\s*年\s*'
+    r'(?P<m>' + _NUM + r')\s*月\s*'
+    r'(?P<d>' + _NUM + r')\s*[日号]?'
+    r'(?:\s*(?P<ap2>' + _AP + r')?\s*'
+    r'(?P<h>' + _NUM + r')\s*点'
+    r'(?:\s*(?P<mi>' + _NUM + r')\s*分)?'
+    r'(?:\s*(?P<se>' + _NUM + r')\s*秒)?)?'
+)
+_RE_YEAR_MONTH = re.compile(
+    r'(?<!\d)(?P<y>' + _NUM + r')\s*年\s*(?P<m>' + _NUM + r')\s*月(?!\d)'
+)
+_RE_MONTH_DAY = re.compile(
+    r'(?<!\d)(?P<m>' + _NUM + r')\s*月\s*(?P<d>' + _NUM + r')\s*[日号]'
+)
+_RE_TIME = re.compile(
+    r'(?P<ap>' + _AP + r')?\s*(?<!\d)(?P<h>' + _NUM + r')\s*点'
+    r'(?:\s*(?P<mi>' + _NUM + r')\s*分)?'
+    r'(?:\s*(?P<se>' + _NUM + r')\s*秒)?'
+)
+
+
+def _cn_to_int(s):
+    """中文数字(支持 零〇一二两三四五六七八九十百千 与阿拉伯数字) -> int。"""
+    if not s:
+        return None
+    if s.isdigit():
+        return int(s)
+    if all(c in _CN_DIGITS for c in s):
+        # 逐位数字, 如 二零二四 -> 2024
+        n = 0
+        for c in s:
+            n = n * 10 + _CN_DIGITS[c]
+        return n
+    # 含 十/百/千 的位置计数法, 如 二十五 -> 25
+    total = 0
+    section = 0
+    for c in s:
+        if c in _CN_DIGITS:
+            section = _CN_DIGITS[c]
+        elif c == '十':
+            section = 10 if section == 0 else section * 10
+            total += section
+            section = 0
+        elif c == '百':
+            section = 100 if section == 0 else section * 100
+            total += section
+            section = 0
+        elif c == '千':
+            section = 1000 if section == 0 else section * 1000
+            total += section
+            section = 0
+        else:
+            return None
+    total += section
+    return total if total > 0 else None
+
+
+def _int_of(m, name):
+    return _cn_to_int(m.group(name))
+
+
+def _format_hms(ap, h, mi, se):
+    """把 点/分/秒 与上下午标记格式化为 24 小时制 HH:MM[:SS]。"""
+    if h is None or not (0 <= h <= 23):
+        return None
+    ap = ap or ''
+    if ap in ('下午', '傍晚', '晚上', '深夜', '晚'):
+        if h < 12:
+            h += 12
+    elif ap in ('中午', '正午'):
+        if h < 12:
+            h += 12
+    elif ap == '凌晨':
+        if h == 12:
+            h = 0
+    if not (0 <= h <= 23):
+        return None
+    if mi is not None and not (0 <= mi <= 59):
+        return None
+    if se is not None and not (0 <= se <= 59):
+        return None
+    out = f'{h:02d}:{0 if mi is None else mi:02d}'
+    if se is not None:
+        out += f':{se:02d}'
+    return out
+
+
+def _format_datetime(m):
+    y, mo, d = _int_of(m, 'y'), _int_of(m, 'm'), _int_of(m, 'd')
+    if None in (y, mo, d) or not (1 <= y <= 9999 and 1 <= mo <= 12 and 1 <= d <= 31):
+        return None
+    date = f'{y:04d}-{mo:02d}-{d:02d}'
+    h = _int_of(m, 'h')
+    if h is None:
+        return date
+    ts = _format_hms(m.group('ap2') or m.group('ap1'), h,
+                     _int_of(m, 'mi'), _int_of(m, 'se'))
+    if ts is None:
+        return None
+    return f'{date} {ts}'
+
+
+def _format_year_month(m):
+    y, mo = _int_of(m, 'y'), _int_of(m, 'm')
+    if None in (y, mo) or not (1 <= mo <= 12):
+        return None
+    return f'{y:04d}-{mo:02d}'
+
+
+def _format_month_day(m):
+    mo, d = _int_of(m, 'm'), _int_of(m, 'd')
+    if None in (mo, d) or not (1 <= mo <= 12 and 1 <= d <= 31):
+        return None
+    return f'{mo:02d}-{d:02d}'
+
+
+def _format_time(m):
+    return _format_hms(m.group('ap'), _int_of(m, 'h'),
+                       _int_of(m, 'mi'), _int_of(m, 'se'))
+
+
+def _find_datetime_segments(text):
+    """找出文本中的中文日期时间片段, 返回 [(start, end, 替换串), ...] (不重叠)。"""
+    found = []
+    for m in _RE_DATETIME.finditer(text):
+        r = _format_datetime(m)
+        if r is not None:
+            found.append((m.start(), m.end(), r))
+    for m in _RE_YEAR_MONTH.finditer(text):
+        r = _format_year_month(m)
+        if r is not None:
+            found.append((m.start(), m.end(), r))
+    for m in _RE_MONTH_DAY.finditer(text):
+        r = _format_month_day(m)
+        if r is not None:
+            found.append((m.start(), m.end(), r))
+    for m in _RE_TIME.finditer(text):
+        r = _format_time(m)
+        if r is not None:
+            found.append((m.start(), m.end(), r))
+    # 按起点排序, 起点相同取较长匹配; 跳过重叠
+    found.sort(key=lambda x: (x[0], -(x[1] - x[0])))
+    merged = []
+    last_end = -1
+    for s, e, r in found:
+        if s >= last_end:
+            merged.append((s, e, r))
+            last_end = e
+    return merged
 
 
 def _merge_ranges(ranges):
@@ -351,6 +517,7 @@ def convert_text(text, enabled):
           映射信息)。
     区间为 [(起始下标, 结束下标), ...] 形式, 已合并相邻区间, 用于 diff 高亮。
     末尾的换行符(\n / \r)会被删除, 并在输入区间中标注出来。
+    中文日期时间(2024年1月5日下午3点)会转换为标准格式并标注。
     映射信息用于选中区域联动:
         'in_to_out_start': 每个输入字符对应的输出起点(含末尾哨兵)
         'out_to_in'       : 每个输出字符对应的输入下标
@@ -373,29 +540,69 @@ def convert_text(text, enabled):
     out = []
     out_pos = 0
     in_to_out_start = []   # 每个输入字符对应的输出起点
+    in_to_out_end = []     # 每个输入字符对应的输出终点
     out_to_in = []         # 每个输出字符对应的输入下标
-    for in_pos in range(cut):
-        in_to_out_start.append(out_pos)
-        ch = text[in_pos]
-        new = ch
-        changed = False
-        for k in order:
-            n = MAPPINGS[k].get(new, new)
-            if n != new:
-                counts[k] += 1
-                new = n
-                changed = True
-        if changed:
-            red.append((in_pos, in_pos + 1))
-            if new:
-                green.append((out_pos, out_pos + len(new)))
-        out.append(new)
-        out_pos += len(new)
-        for _ in new:
-            out_to_in.append(in_pos)
+
+    def convert_range(in_start, in_end):
+        """逐字符转换 [in_start, in_end) 区间。"""
+        nonlocal out_pos
+        for in_pos in range(in_start, in_end):
+            in_to_out_start.append(out_pos)
+            ch = text[in_pos]
+            new = ch
+            changed = False
+            for k in order:
+                n = MAPPINGS[k].get(new, new)
+                if n != new:
+                    counts[k] += 1
+                    new = n
+                    changed = True
+            if changed:
+                red.append((in_pos, in_pos + 1))
+                if new:
+                    green.append((out_pos, out_pos + len(new)))
+            out.append(new)
+            out_pos += len(new)
+            in_to_out_end.append(out_pos)
+            for _ in new:
+                out_to_in.append(in_pos)
+
+    def convert_dt(in_start, in_end, repl):
+        """把一段中文日期时间替换为标准格式并标注。"""
+        nonlocal out_pos
+        counts['datetime'] = counts.get('datetime', 0) + 1
+        red.append((in_start, in_end))
+        new_end = out_pos + len(repl) if repl else out_pos + (in_end - in_start)
+        for _ in range(in_start, in_end):
+            in_to_out_start.append(out_pos)
+            in_to_out_end.append(new_end)
+        if repl:
+            green.append((out_pos, out_pos + len(repl)))
+            out.append(repl)
+            out_pos += len(repl)
+            for _ in repl:
+                out_to_in.append(in_start)
+        else:
+            out.append(text[in_start:in_end])
+            out_pos += (in_end - in_start)
+            for in_pos in range(in_start, in_end):
+                out_to_in.append(in_pos)
+
+    # 日期时间替换段
+    segments = _find_datetime_segments(text[:cut]) if enabled.get('datetime', True) else []
+    pos = 0
+    for s, e, repl in segments:
+        if s > pos:
+            convert_range(pos, s)
+        convert_dt(s, e, repl)
+        pos = e
+    if pos < cut:
+        convert_range(pos, cut)
+
     in_to_out_start.append(out_pos)   # 哨兵: 输入末尾之后
     return ''.join(out), counts, _merge_ranges(red), _merge_ranges(green), {
         'in_to_out_start': in_to_out_start,
+        'in_to_out_end': in_to_out_end,
         'out_to_in': out_to_in,
         'cut': cut,
     }
@@ -1317,14 +1524,14 @@ class App:
         opt_frame.pack(fill='x')
         for i, key in enumerate(OPTION_ORDER):
             cell = ttk.Frame(opt_frame)
-            cell.grid(row=i // 4, column=i % 4, padx=6, pady=4, sticky='w')
+            cell.grid(row=i // 3, column=i % 3, padx=6, pady=4, sticky='w')
             sw = Switch(cell, variable=self.enabled[key],
                         command=self._on_setting_changed, dark=self.dark,
                         width=40, height=22, bg=theme['root_bg'])
             sw.pack(side='left')
             ttk.Label(cell, text=self.tr(f'opt_{key}')).pack(side='left', padx=(6, 0))
             self._switches.append(sw)
-        for col in range(4):
+        for col in range(3):
             opt_frame.columnconfigure(col, weight=1)
         ttk.Label(sec, text=self.tr('opt_hint'), foreground=theme['hint_fg']
                   ).pack(anchor='w', pady=(8, 0))
@@ -1567,12 +1774,12 @@ class App:
         m = self._map
         s = _idx_to_offset(s_idx, self._in_line_starts)
         e = _idx_to_offset(e_idx, self._in_line_starts)
-        if s >= m['cut']:
+        if s >= m['cut'] or s >= e:
             return None
         e = min(e, m['cut'])
         os_ = m['in_to_out_start'][s] + self._prefix_len
-        oe = m['in_to_out_start'][e] + self._prefix_len
-        if os_ == oe:
+        oe = m['in_to_out_end'][e - 1] + self._prefix_len
+        if os_ >= oe:
             return None
         return (_offset_to_index(os_, self._out_line_starts, len(self._last_display)),
                 _offset_to_index(oe, self._out_line_starts, len(self._last_display)))
@@ -1580,19 +1787,24 @@ class App:
     def _map_output_range(self, s_idx, e_idx):
         """输出框选区 -> 输入框对应区间 (返回 Tk 索引或 None)。"""
         m = self._map
-        if not m['out_to_in']:
-            return None
         s = _idx_to_offset(s_idx, self._out_line_starts) - self._prefix_len
         e = _idx_to_offset(e_idx, self._out_line_starts) - self._prefix_len
-        total = len(m['out_to_in'])
-        if e <= 0 or s >= total:
-            return None
-        s = max(0, min(s, total - 1))
-        e = min(e, total)
         if s >= e:
             return None
-        ins = m['out_to_in'][s]
-        ine = m['out_to_in'][e - 1] + 1
+        total = len(m['out_to_in'])
+        if total <= 0:
+            return None
+        s = min(max(s, 0), total)
+        e = min(max(e, 0), total)
+        if s >= e:
+            return None
+        # 输入字符的输出区间 [start, end) 恰好划分全部输出;
+        # 用两个递增数组二分定位选区覆盖的输入区间
+        ins = bisect.bisect_right(m['in_to_out_end'], s)
+        ine = bisect.bisect_left(m['in_to_out_start'], e)
+        if ins >= ine or ins >= m['cut']:
+            return None
+        ine = min(ine, m['cut'])
         return (_offset_to_index(ins, self._in_line_starts, m['cut']),
                 _offset_to_index(ine, self._in_line_starts, m['cut']))
 
