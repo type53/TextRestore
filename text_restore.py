@@ -1048,7 +1048,10 @@ class App:
         self._sections = []       # 设置窗口各分区容器 (锚点)
         self._nav_guard = False   # 防止导航点击与 scrollspy 互相触发
         self._nav_current = -1
+        self._save_after = None   # 输入状态防抖保存计时器
         cfg = _load_config()
+        self._last_input = cfg.get('last_input')
+        self._last_cursor = cfg.get('last_cursor')
         self.dark = bool(cfg.get('dark', False))
         self.lang = cfg.get('lang') or _detect_lang()
         if self.lang not in STRINGS:
@@ -1079,6 +1082,18 @@ class App:
         self._build_ui()
         self.apply_theme(self.dark)
         self._apply_window_icon()
+        # 恢复上次的输入内容与光标位置
+        if self._last_input is not None:
+            self.input_text.insert('1.0', self._last_input)
+            self.input_text.edit_reset()
+        if self._last_cursor:
+            try:
+                self.input_text.mark_set('insert', self._last_cursor)
+                self.input_text.see('insert')
+            except tk.TclError:
+                pass
+        # 关闭窗口时保存输入状态
+        root.protocol('WM_DELETE_WINDOW', self._on_close)
         self.input_text.focus_set()
         self.do_convert()
 
@@ -1791,6 +1806,9 @@ class App:
             'include_suffix': self.include_suffix.get(),
             'options': {k: self.enabled[k].get() for k in OPTION_ORDER},
             'fonts': fonts,
+            # 输入框状态记忆: 内容 + 光标位置 (防抖/关闭时保存)
+            'last_input': self.input_text.get('1.0', 'end-1c'),
+            'last_cursor': self.input_text.index('insert'),
         })
 
     def _apply_text_widget_theme(self, w):
@@ -1937,6 +1955,31 @@ class App:
         self.output_text.tag_remove('mirror', '1.0', 'end')
         self.input_text.tag_remove('mirror', '1.0', 'end')
         self.root.after_idle(self._refresh_mirror)
+        # 输入状态变化 -> 防抖保存 (停止输入 600ms 后落盘)
+        self._schedule_state_save()
+
+    def _schedule_state_save(self):
+        if self._save_after is not None:
+            try:
+                self.root.after_cancel(self._save_after)
+            except Exception:
+                pass
+        self._save_after = self.root.after(600, self._do_state_save)
+
+    def _do_state_save(self):
+        self._save_after = None
+        self._save_settings()
+
+    def _on_close(self):
+        """窗口关闭: 取消防抖计时并立即保存输入状态。"""
+        if self._save_after is not None:
+            try:
+                self.root.after_cancel(self._save_after)
+            except Exception:
+                pass
+            self._save_after = None
+        self._save_settings()
+        self.root.destroy()
 
     def copy_result(self):
         content = self.output_text.get('1.0', 'end-1c')
