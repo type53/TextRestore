@@ -122,11 +122,12 @@ STRINGS = {
         'confirm_title': '请确认',
         'hist_ok': '确定',
         'hist_cancel': '取消',
-        'hist_confirm_title': '输入框已有内容',
-        'hist_confirm_msg': ('输入框中已有内容, 载入历史记录会覆盖它。\n'
-                             '"备份并覆盖"会先把当前内容存入历史记录。'),
-        'hist_backup': '备份并覆盖',
-        'hist_overwrite': '覆盖',
+        'hist_new': '新记录',
+        'hist_loaded_new': '已切换到新记录',
+        'hist_rename': '重命名',
+        'hist_rename_title': '重命名历史记录',
+        'hist_rename_msg': '输入新的名称 (留空则恢复为内容预览):',
+        'hist_renamed': '已重命名 ✓',
         'hist_loaded': '已载入历史记录 {ts}',
         'hist_loaded_plain': '已载入历史记录',
         'hist_blank': '(空)',
@@ -211,12 +212,12 @@ STRINGS = {
         'confirm_title': 'Please confirm',
         'hist_ok': 'OK',
         'hist_cancel': 'Cancel',
-        'hist_confirm_title': 'Input is not empty',
-        'hist_confirm_msg': ('The input box already has content; loading a history entry '
-                             'will overwrite it.\n"Backup & overwrite" saves the current '
-                             'content to history first.'),
-        'hist_backup': 'Backup & overwrite',
-        'hist_overwrite': 'Overwrite',
+        'hist_new': 'New record',
+        'hist_loaded_new': 'Switched to New record',
+        'hist_rename': 'Rename',
+        'hist_rename_title': 'Rename history entry',
+        'hist_rename_msg': 'Enter a new name (leave empty to use the content preview):',
+        'hist_renamed': 'Renamed ✓',
         'hist_loaded': 'Loaded history entry {ts}',
         'hist_loaded_plain': 'Loaded history entry',
         'hist_blank': '(empty)',
@@ -1096,8 +1097,7 @@ class App:
         self._nav_guard = False   # 防止导航点击与 scrollspy 互相触发
         self._nav_current = -1
         self._save_after = None   # 输入状态防抖保存计时器
-        self._hist_selected = None   # 侧栏历史记录当前选中下标
-        self._hist_guard = False     # 对话框期间防止重入
+        self._hist_guard = False     # 列表事件期间防止重入
         cfg = _load_config()
         # 历史记录 (兼容纯字符串与 {text, ts} 两种格式)
         self.history = []
@@ -1105,8 +1105,11 @@ class App:
             if isinstance(e, str):
                 self.history.append({'text': e, 'ts': ''})
             elif isinstance(e, dict) and isinstance(e.get('text'), str):
-                self.history.append({'text': e['text'], 'ts': e.get('ts', '')})
+                self.history.append({'text': e['text'], 'ts': e.get('ts', ''),
+                                     'name': e.get('name', '')})
         del self.history[MAX_HISTORY:]
+        self.draft = cfg.get('draft', '')          # "新记录"槽内容
+        self._current_slot = cfg.get('current_slot')   # None/0=新记录/k=history[k-1]
         self._last_input = cfg.get('last_input')
         self._last_cursor = cfg.get('last_cursor')
         self.dark = bool(cfg.get('dark', False))
@@ -1149,6 +1152,14 @@ class App:
                 self.input_text.see('insert')
             except tk.TclError:
                 pass
+        # 依据恢复的内容定位当前槽位 (未匹配任何槽时视为新的临时内容)
+        if self._last_input is not None:
+            if self._last_input == self.draft:
+                self._current_slot = 0
+            else:
+                m = next((i for i, e in enumerate(self.history)
+                          if e.get('text') == self._last_input), -1)
+                self._current_slot = m + 1 if m >= 0 else None
         # 关闭窗口时保存输入状态
         root.protocol('WM_DELETE_WINDOW', self._on_close)
         self.input_text.focus_set()
@@ -1328,7 +1339,7 @@ class App:
         self.hist_list = tk.Listbox(list_wrap, activestyle='none',
                                     exportselection=False, relief='flat',
                                     bd=0, highlightthickness=0,
-                                    font=UI_FONT, width=22)
+                                    font=UI_FONT, width=16)
         self.hist_scroll = ttk.Scrollbar(list_wrap, orient='vertical',
                                          command=self.hist_list.yview)
         self.hist_list.configure(yscrollcommand=self.hist_scroll.set)
@@ -1338,30 +1349,64 @@ class App:
 
         hist_btns = ttk.Frame(sb, style='Sidebar.TFrame')
         hist_btns.pack(fill='x', pady=(8, 0))
-        self.btn_hist_del = ttk.Button(hist_btns, text=self.tr('btn_hist_del'),
+        self.btn_hist_rename = ttk.Button(hist_btns, text=self.tr('hist_rename'),
+                                          command=self.rename_history)
+        self.btn_hist_rename.pack(fill='x')
+        row2 = ttk.Frame(hist_btns, style='Sidebar.TFrame')
+        row2.pack(fill='x', pady=(6, 0))
+        self.btn_hist_del = ttk.Button(row2, text=self.tr('btn_hist_del'),
                                        command=self.delete_history)
-        self.btn_hist_del.pack(side='left')
-        self.btn_hist_clear = ttk.Button(hist_btns, text=self.tr('btn_hist_clear'),
+        self.btn_hist_del.pack(side='left', expand=True, fill='x')
+        self.btn_hist_clear = ttk.Button(row2, text=self.tr('btn_hist_clear'),
                                          command=self.clear_history)
-        self.btn_hist_clear.pack(side='left', padx=(6, 0))
+        self.btn_hist_clear.pack(side='left', expand=True, fill='x', padx=(6, 0))
+
+    @staticmethod
+    def _preview_text(text, limit=20):
+        """内容预览: 首行 + 合并空白 + 截断。"""
+        text = (text or '').strip()
+        line = ' '.join(text.split('\n')[0].split()) if text else ''
+        if len(line) > limit:
+            line = line[:limit] + '…'
+        return line
 
     def _history_preview(self, entry):
         """历史记录列表显示的内容预览 (首行, 截断)。"""
-        text = (entry.get('text') or '').strip()
-        line = ' '.join(text.split('\n')[0].split()) if text else ''
-        if len(line) > 20:
-            line = line[:20] + '…'
-        return line or self.tr('hist_blank')
+        return self._preview_text(entry.get('text')) or self.tr('hist_blank')
+
+    def _history_label(self, slot):
+        """列表项文字: slot 0 = 新记录槽, 其余对应 history[slot-1]。"""
+        if slot == 0:
+            prev = self._preview_text(self.draft, 12)
+            base = self.tr('hist_new')
+            return f'{base} · {prev}' if prev else base
+        entry = self.history[slot - 1]
+        name = (entry.get('name') or '').strip()
+        return name or self._history_preview(entry)
 
     def _refresh_history_list(self):
         if self.hist_list is None or not self.hist_list.winfo_exists():
             return
         self.hist_list.delete(0, 'end')
-        for e in self.history:
-            self.hist_list.insert('end', self._history_preview(e))
-        if self._hist_selected is not None and 0 <= self._hist_selected < len(self.history):
-            self.hist_list.selection_set(self._hist_selected)
-            self.hist_list.see(self._hist_selected)
+        self.hist_list.insert('end', self._history_label(0))
+        for i in range(len(self.history)):
+            self.hist_list.insert('end', self._history_label(i + 1))
+        # 新记录行用强调色区分
+        try:
+            self.hist_list.itemconfig(
+                0, foreground='#4a9eff' if self.dark else '#1a6fb0')
+        except tk.TclError:
+            pass
+        slot = self._current_slot
+        if slot is not None and 0 <= slot < self.hist_list.size():
+            self.hist_list.selection_clear(0, 'end')
+            self.hist_list.selection_set(slot)
+            self.hist_list.see(slot)
+
+    def _sync_draft(self):
+        """当前内容属于草稿槽(新记录)时, 同步到 self.draft。"""
+        if self._current_slot in (0, None):
+            self.draft = self.input_text.get('1.0', 'end-1c')
 
     def _add_history(self, text, select=False):
         """把内容加入历史记录 (去重后置顶, 超出上限丢弃最旧)。"""
@@ -1369,9 +1414,10 @@ class App:
             return False
         self.history = [e for e in self.history if e.get('text') != text]
         self.history.insert(0, {'text': text,
-                                'ts': time.strftime('%m-%d %H:%M')})
+                                'ts': time.strftime('%m-%d %H:%M'),
+                                'name': ''})
         del self.history[MAX_HISTORY:]
-        self._hist_selected = 0 if select else None
+        self._current_slot = 1 if select else None
         self._refresh_history_list()
         self._save_settings()
         return True
@@ -1382,45 +1428,53 @@ class App:
         if not text.strip():
             self._flash(self.tr('hist_empty_input'))
             return
+        self._sync_draft()
         self._add_history(text, select=True)
         self._flash(self.tr('hist_saved'))
 
     def _on_history_select(self, event=None):
-        """点击历史记录: 载入输入框 (有内容时先询问)。"""
-        if self._hist_guard or not self.history:
+        """点击列表项: 静默切换槽位 (新记录 / 历史记录), 不做任何覆盖询问。
+
+        切走前若当前在"新记录"槽, 内容已存入 self.draft, 因此不会丢失。
+        """
+        if self._hist_guard:
             return
         sel = self.hist_list.curselection()
-        if not sel or sel[0] >= len(self.history):
+        if not sel:
             return
-        entry = self.history[sel[0]]
-        text = entry.get('text', '')
-        current = self.input_text.get('1.0', 'end-1c')
-        if current == text:
-            # 内容与所选历史记录完全相同: 无需询问, 也无需重新载入
-            self._hist_selected = sel[0]
-            self._refresh_history_list()
+        slot = sel[0]
+        if slot > len(self.history) or slot == self._current_slot:
             return
-        if current.strip():
-            self._hist_guard = True
-            try:
-                choice = self._ask_overwrite()
-            finally:
-                self._hist_guard = False
-            if choice == 'cancel':
-                self.hist_list.selection_clear(0, 'end')
-                if self._hist_selected is not None and \
-                        0 <= self._hist_selected < len(self.history):
-                    self.hist_list.selection_set(self._hist_selected)
-                return
-            if choice == 'backup':
-                self._add_history(current)
-        self._load_into_input(text)
-        self._hist_selected = next(
-            (i for i, e in enumerate(self.history) if e.get('text') == text), None)
+        self._sync_draft()
+        if slot == 0:
+            self._load_into_input(self.draft)
+            msg = self.tr('hist_loaded_new')
+        else:
+            entry = self.history[slot - 1]
+            self._load_into_input(entry.get('text', ''))
+            ts = entry.get('ts')
+            msg = self.tr('hist_loaded', ts=f'({ts})') if ts \
+                else self.tr('hist_loaded_plain')
+        self._current_slot = slot
         self._refresh_history_list()
-        ts = entry.get('ts')
-        self._flash(self.tr('hist_loaded', ts=f'({ts})') if ts
-                    else self.tr('hist_loaded_plain'))
+        self._flash(msg)
+
+    def rename_history(self):
+        """重命名选中的历史记录 (新记录槽不可重命名)。"""
+        sel = self.hist_list.curselection()
+        if not sel or sel[0] == 0 or sel[0] - 1 >= len(self.history):
+            self._flash(self.tr('hist_none_selected'))
+            return
+        entry = self.history[sel[0] - 1]
+        initial = (entry.get('name') or '').strip() or self._history_preview(entry)
+        new = self._ask_text(self.tr('hist_rename_title'),
+                             self.tr('hist_rename_msg'), initial)
+        if new is None:
+            return
+        entry['name'] = new.strip()
+        self._refresh_history_list()
+        self._save_settings()
+        self._flash(self.tr('hist_renamed'))
 
     def _load_into_input(self, text):
         self.input_text.delete('1.0', 'end')
@@ -1433,13 +1487,13 @@ class App:
 
     def delete_history(self):
         sel = self.hist_list.curselection()
-        if not sel or sel[0] >= len(self.history):
+        if not sel or sel[0] == 0 or sel[0] - 1 >= len(self.history):
             self._flash(self.tr('hist_none_selected'))
             return
         if self._ask_confirm(self.tr('hist_delete_confirm')) != 'ok':
             return
-        del self.history[sel[0]]
-        self._hist_selected = None
+        del self.history[sel[0] - 1]
+        self._current_slot = None
         self._refresh_history_list()
         self._save_settings()
         self._flash(self.tr('hist_deleted'))
@@ -1451,31 +1505,54 @@ class App:
         if self._ask_confirm(self.tr('hist_clear_confirm')) != 'ok':
             return
         self.history = []
-        self._hist_selected = None
+        self._current_slot = None
         self._refresh_history_list()
         self._save_settings()
 
     # ---------- 对话框 ----------
-    def _ask_overwrite(self):
-        """输入框已有内容时的三选项询问。"""
-        return self._ask_dialog(
-            self.tr('hist_confirm_title'), self.tr('hist_confirm_msg'),
-            ((self.tr('hist_backup'), 'backup'),
-             (self.tr('hist_overwrite'), 'overwrite')),
-            self.tr('hist_cancel'))
-
     def _ask_confirm(self, msg):
         return self._ask_dialog(self.tr('confirm_title'), msg,
                                 ((self.tr('hist_ok'), 'ok'),),
                                 self.tr('hist_cancel'))
 
-    def _ask_dialog(self, title, msg, options, cancel_text):
-        """通用模态对话框: options 为 [(按钮文字, 返回值), ...], 返回选中值或 'cancel'。"""
+    def _ask_text(self, title, msg, initial=''):
+        """文本输入对话框: 返回输入内容, 取消返回 None。"""
         win = tk.Toplevel(self.root)
         win.title(title)
         win.transient(self.root)
         win.resizable(False, False)
-        theme = THEMES['dark' if self.dark else 'light']
+        self._set_dialog_icon(win)
+        frame = ttk.Frame(win, padding=14)
+        frame.pack(fill='both', expand=True)
+        ttk.Label(frame, text=msg, wraplength=400,
+                  justify='left').pack(anchor='w')
+        var = tk.StringVar(value=initial)
+        ent = ttk.Entry(frame, textvariable=var, width=36)
+        ent.pack(fill='x', pady=(8, 0))
+        ent.select_range(0, 'end')
+        result = {'v': None}
+
+        def ok(_=None):
+            result['v'] = var.get()
+            win.destroy()
+
+        def cancel(_=None):
+            result['v'] = None
+            win.destroy()
+
+        btns = ttk.Frame(frame)
+        btns.pack(fill='x', pady=(12, 0))
+        ttk.Button(btns, text=self.tr('hist_cancel'), command=cancel).pack(side='right')
+        ttk.Button(btns, text=self.tr('hist_ok'), command=ok).pack(side='right', padx=(6, 0))
+        win.bind('<Return>', ok)
+        win.bind('<Escape>', cancel)
+        win.protocol('WM_DELETE_WINDOW', cancel)
+        self._center_dialog(win)
+        ent.focus_set()
+        self.root.wait_window(win)
+        return result['v']
+
+    def _set_dialog_icon(self, win):
         try:
             if getattr(sys, 'frozen', False):
                 win.iconbitmap(default=sys.executable)
@@ -1483,6 +1560,24 @@ class App:
                 win.iconbitmap(ICON_PATH)
         except tk.TclError:
             pass
+
+    def _center_dialog(self, win):
+        win.update_idletasks()
+        x = self.root.winfo_rootx() + max(
+            0, (self.root.winfo_width() - win.winfo_width()) // 2)
+        y = self.root.winfo_rooty() + max(
+            0, (self.root.winfo_height() - win.winfo_height()) // 3)
+        win.geometry(f'+{x}+{y}')
+        win.grab_set()
+        win.focus_set()
+
+    def _ask_dialog(self, title, msg, options, cancel_text):
+        """通用模态对话框: options 为 [(按钮文字, 返回值), ...], 返回选中值或 'cancel'。"""
+        win = tk.Toplevel(self.root)
+        win.title(title)
+        win.transient(self.root)
+        win.resizable(False, False)
+        self._set_dialog_icon(win)
         frame = ttk.Frame(win, padding=14)
         frame.pack(fill='both', expand=True)
         ttk.Label(frame, text=msg, wraplength=400, justify='left').pack(anchor='w')
@@ -1500,12 +1595,7 @@ class App:
                        command=lambda v=val: choose(v)).pack(side='right', padx=(6, 0))
         win.bind('<Escape>', lambda e: choose('cancel'))
         win.protocol('WM_DELETE_WINDOW', lambda: choose('cancel'))
-        win.update_idletasks()
-        x = self.root.winfo_rootx() + max(0, (self.root.winfo_width() - win.winfo_width()) // 2)
-        y = self.root.winfo_rooty() + max(0, (self.root.winfo_height() - win.winfo_height()) // 3)
-        win.geometry(f'+{x}+{y}')
-        win.grab_set()
-        win.focus_set()
+        self._center_dialog(win)
         self.root.wait_window(win)
         return result['v']
 
@@ -1630,6 +1720,15 @@ class App:
                             bordercolor='#3c3c3c',
                             lightcolor='#3c3c3c', darkcolor='#3c3c3c')
             style.map('TSpinbox',
+                      fieldbackground=[('readonly', theme['text_bg'])],
+                      foreground=[('readonly', theme['text_fg'])])
+            style.configure('TEntry',
+                            fieldbackground=theme['text_bg'],
+                            foreground=theme['text_fg'],
+                            insertcolor=theme['text_fg'],
+                            bordercolor='#3c3c3c',
+                            lightcolor='#3c3c3c', darkcolor='#3c3c3c')
+            style.map('TEntry',
                       fieldbackground=[('readonly', theme['text_bg'])],
                       foreground=[('readonly', theme['text_fg'])])
             # 下拉弹出列表 (Combobox popdown)
@@ -2073,11 +2172,13 @@ class App:
         # 左侧历史侧栏文本
         self.hist_title.configure(text=self.tr('hist_title'))
         self.btn_hist_save.configure(text=self.tr('btn_hist_save'))
+        self.btn_hist_rename.configure(text=self.tr('hist_rename'))
         self.btn_hist_del.configure(text=self.tr('btn_hist_del'))
         self.btn_hist_clear.configure(text=self.tr('btn_hist_clear'))
         self._refresh_history_list()
 
     def _save_settings(self):
+        self._sync_draft()
         fonts = {}
         for key in ('input', 'output'):
             fv = self.font_vars[key]
@@ -2102,8 +2203,10 @@ class App:
             'include_suffix': self.include_suffix.get(),
             'options': {k: self.enabled[k].get() for k in OPTION_ORDER},
             'fonts': fonts,
-            # 历史记录
+            # 历史记录 + 新记录(草稿)槽 + 当前槽位
             'history': self.history,
+            'draft': self.draft,
+            'current_slot': self._current_slot,
             # 输入框状态记忆: 内容 + 光标位置 (防抖/关闭时保存)
             'last_input': self.input_text.get('1.0', 'end-1c'),
             'last_cursor': self.input_text.index('insert'),
@@ -2267,6 +2370,7 @@ class App:
     def _do_state_save(self):
         self._save_after = None
         self._save_settings()
+        self._refresh_history_list()   # 刷新"新记录"槽的预览
 
     def _on_close(self):
         """窗口关闭: 取消防抖计时并立即保存输入状态。"""
