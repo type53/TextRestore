@@ -49,6 +49,7 @@ ChatGPT / Claude Code / Gemini 等模型有时会在输出中偷偷插入或替�
 import os
 import sys
 import json
+import time
 import bisect
 import re
 import tkinter as tk
@@ -58,6 +59,7 @@ import unicodedata
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 ICON_PATH = os.path.join(APP_DIR, 'icon.ico')
+MAX_HISTORY = 50          # 历史记录最多保留条数
 
 UI_FONT = ('Microsoft YaHei UI', 10)
 TEXT_FONT = ('Microsoft YaHei UI', 11)
@@ -107,6 +109,26 @@ STRINGS = {
         'input_box': '输入框',
         'output_box': '输出框',
         'lang_label': '语言:',
+        'hist_title': '历史记录',
+        'btn_hist_save': '＋ 存入历史',
+        'btn_hist_del': '删除',
+        'btn_hist_clear': '清空',
+        'hist_saved': '已存入历史记录 ✓',
+        'hist_empty_input': '输入为空, 无法存入历史。',
+        'hist_deleted': '已删除选中记录。',
+        'hist_none_selected': '请先选择一条历史记录。',
+        'hist_clear_confirm': '确定清空全部历史记录? 此操作不可撤销。',
+        'hist_ok': '确定',
+        'hist_cancel': '取消',
+        'hist_confirm_title': '输入框已有内容',
+        'hist_confirm_msg': ('输入框中已有内容, 载入历史记录会覆盖它。\n'
+                             '"备份并覆盖"会先把当前内容存入历史记录。'),
+        'hist_backup': '备份并覆盖',
+        'hist_overwrite': '覆盖',
+        'hist_loaded': '已载入历史记录 {ts}',
+        'hist_loaded_plain': '已载入历史记录',
+        'hist_blank': '(空)',
+        'hist_empty': '暂无历史记录。',
         'opt_fullwidth': '全角转半角',
         'opt_punct': '中文标点',
         'opt_math': '花体字体',
@@ -174,6 +196,27 @@ STRINGS = {
         'input_box': 'Input box',
         'output_box': 'Output box',
         'lang_label': 'Language:',
+        'hist_title': 'History',
+        'btn_hist_save': '＋ Save',
+        'btn_hist_del': 'Delete',
+        'btn_hist_clear': 'Clear all',
+        'hist_saved': 'Saved to history ✓',
+        'hist_empty_input': 'Input is empty, nothing to save.',
+        'hist_deleted': 'Entry deleted.',
+        'hist_none_selected': 'Select a history entry first.',
+        'hist_clear_confirm': 'Clear all history? This cannot be undone.',
+        'hist_ok': 'OK',
+        'hist_cancel': 'Cancel',
+        'hist_confirm_title': 'Input is not empty',
+        'hist_confirm_msg': ('The input box already has content; loading a history entry '
+                             'will overwrite it.\n"Backup & overwrite" saves the current '
+                             'content to history first.'),
+        'hist_backup': 'Backup & overwrite',
+        'hist_overwrite': 'Overwrite',
+        'hist_loaded': 'Loaded history entry {ts}',
+        'hist_loaded_plain': 'Loaded history entry',
+        'hist_blank': '(empty)',
+        'hist_empty': 'No history yet.',
         'opt_fullwidth': 'Fullwidth',
         'opt_punct': 'Chinese punct.',
         'opt_math': 'Math fonts',
@@ -1032,8 +1075,8 @@ def _save_config(cfg):
 class App:
     def __init__(self, root):
         self.root = root
-        root.geometry('820x680')
-        root.minsize(640, 320)
+        root.geometry('1000x700')
+        root.minsize(860, 400)
         self._status_after = None
         self._syncing = False
         self._map = None          # 最近一次转换的映射信息
@@ -1049,7 +1092,17 @@ class App:
         self._nav_guard = False   # 防止导航点击与 scrollspy 互相触发
         self._nav_current = -1
         self._save_after = None   # 输入状态防抖保存计时器
+        self._hist_selected = None   # 侧栏历史记录当前选中下标
+        self._hist_guard = False     # 对话框期间防止重入
         cfg = _load_config()
+        # 历史记录 (兼容纯字符串与 {text, ts} 两种格式)
+        self.history = []
+        for e in (cfg.get('history') or []):
+            if isinstance(e, str):
+                self.history.append({'text': e, 'ts': ''})
+            elif isinstance(e, dict) and isinstance(e.get('text'), str):
+                self.history.append({'text': e['text'], 'ts': e.get('ts', '')})
+        del self.history[MAX_HISTORY:]
         self._last_input = cfg.get('last_input')
         self._last_cursor = cfg.get('last_cursor')
         self.dark = bool(cfg.get('dark', False))
@@ -1134,13 +1187,23 @@ class App:
         main.grid(row=0, column=0, sticky='nsew')
         self.root.rowconfigure(0, weight=1)
         self.root.columnconfigure(0, weight=1)
-        main.columnconfigure(0, weight=1)
+        main.rowconfigure(0, weight=1)
+        main.columnconfigure(0, weight=0, minsize=215)   # 左侧历史记录侧栏
+        main.columnconfigure(1, weight=1)                # 右侧内容区
+
+        # ---- 左侧: 历史记录侧栏 (AI 对话网页风格) ----
+        self._build_sidebar(main)
+
+        # ---- 右侧: 内容区 ----
+        content = ttk.Frame(main)
+        content.grid(row=0, column=1, sticky='nsew', padx=(12, 0))
+        content.columnconfigure(0, weight=1)
 
         # ---- 顶部提示 + 图例 ----
-        self.hint_label = ttk.Label(main, text=self.tr('hint'), foreground='#667',
-                                    wraplength=760)
+        self.hint_label = ttk.Label(content, text=self.tr('hint'), foreground='#667',
+                                    wraplength=600)
         self.hint_label.grid(row=0, column=0, sticky='w')
-        legend = ttk.Frame(main)
+        legend = ttk.Frame(content)
         legend.grid(row=1, column=0, sticky='w', pady=(2, 0))
         self.legend_red = ttk.Label(legend, text=self.tr('legend_red'),
                                     foreground='#c0392b')
@@ -1151,9 +1214,9 @@ class App:
         self.legend_green.pack(side='left')
 
         # ---- 输入区 ----
-        self.input_label = ttk.Label(main, text=self.tr('input_label'))
+        self.input_label = ttk.Label(content, text=self.tr('input_label'))
         self.input_label.grid(row=2, column=0, sticky='w', pady=(8, 2))
-        in_frame = ttk.Frame(main)
+        in_frame = ttk.Frame(content)
         in_frame.grid(row=3, column=0, sticky='nsew')
         self.input_text = tk.Text(in_frame, height=8, font=TEXT_FONT,
                                   wrap='word', undo=True)
@@ -1163,9 +1226,9 @@ class App:
         self.in_scroll.pack(side='right', fill='y')
 
         # ---- 输出区 ----
-        self.output_label = ttk.Label(main, text=self.tr('output_label'))
+        self.output_label = ttk.Label(content, text=self.tr('output_label'))
         self.output_label.grid(row=4, column=0, sticky='w', pady=(0, 2))
-        out_frame = ttk.Frame(main)
+        out_frame = ttk.Frame(content)
         out_frame.grid(row=5, column=0, sticky='nsew')
         self.output_text = tk.Text(out_frame, height=8, font=TEXT_FONT,
                                    wrap='word')
@@ -1175,8 +1238,8 @@ class App:
         self.out_scroll.pack(side='right', fill='y')
 
         # 两个文本框等高、均匀分配空间, 缩放行为一致
-        main.rowconfigure(3, weight=1, uniform='texts')
-        main.rowconfigure(5, weight=1, uniform='texts')
+        content.rowconfigure(3, weight=1, uniform='texts')
+        content.rowconfigure(5, weight=1, uniform='texts')
 
         # diff 高亮配色: 输入框替换字符飘红, 输出框还原字符飘绿
         self.input_text.tag_configure('red', foreground='#c0392b',
@@ -1189,12 +1252,12 @@ class App:
 
         # ---- 状态信息 (独占一行) ----
         self.status_var = tk.StringVar(value=self.tr('status_ready'))
-        self.status_label = ttk.Label(main, textvariable=self.status_var,
+        self.status_label = ttk.Label(content, textvariable=self.status_var,
                                       foreground='#1a6fb0')
         self.status_label.grid(row=6, column=0, sticky='w', pady=(10, 0))
 
         # ---- 底部: 复制/清空/设置 + 前后缀开关 + 主题 ----
-        bottom = ttk.Frame(main)
+        bottom = ttk.Frame(content)
         bottom.grid(row=7, column=0, sticky='ew', pady=(6, 0))
         self.btn_copy = ttk.Button(bottom, text=self.tr('btn_copy'),
                                    command=self.copy_result)
@@ -1238,6 +1301,220 @@ class App:
             w.bind('<B1-Motion>', self._on_drag)
             w.bind('<ButtonRelease-1>', self._on_selection)
         self.input_text.bind('<Control-a>', self._select_all_in)
+
+        # 填充历史记录列表
+        self._refresh_history_list()
+
+    # ---------- 左侧历史记录侧栏 ----------
+    def _build_sidebar(self, parent):
+        sb = ttk.Frame(parent, style='Sidebar.TFrame', padding=8)
+        sb.grid(row=0, column=0, sticky='nsew')
+        self.sidebar = sb
+
+        self.hist_title = ttk.Label(sb, text=self.tr('hist_title'),
+                                    style='Sidebar.TLabel')
+        self.hist_title.pack(anchor='w', pady=(0, 8))
+
+        self.btn_hist_save = ttk.Button(sb, text=self.tr('btn_hist_save'),
+                                        command=self.save_to_history)
+        self.btn_hist_save.pack(fill='x')
+
+        list_wrap = ttk.Frame(sb, style='Sidebar.TFrame')
+        list_wrap.pack(fill='both', expand=True, pady=(8, 0))
+        self.hist_list = tk.Listbox(list_wrap, activestyle='none',
+                                    exportselection=False, relief='flat',
+                                    bd=0, highlightthickness=0,
+                                    font=UI_FONT, width=22)
+        self.hist_scroll = ttk.Scrollbar(list_wrap, orient='vertical',
+                                         command=self.hist_list.yview)
+        self.hist_list.configure(yscrollcommand=self.hist_scroll.set)
+        self.hist_list.pack(side='left', fill='both', expand=True)
+        self.hist_scroll.pack(side='right', fill='y')
+        self.hist_list.bind('<<ListboxSelect>>', self._on_history_select)
+
+        hist_btns = ttk.Frame(sb, style='Sidebar.TFrame')
+        hist_btns.pack(fill='x', pady=(8, 0))
+        self.btn_hist_del = ttk.Button(hist_btns, text=self.tr('btn_hist_del'),
+                                       command=self.delete_history)
+        self.btn_hist_del.pack(side='left')
+        self.btn_hist_clear = ttk.Button(hist_btns, text=self.tr('btn_hist_clear'),
+                                         command=self.clear_history)
+        self.btn_hist_clear.pack(side='left', padx=(6, 0))
+
+    def _history_preview(self, entry):
+        """历史记录列表显示的内容预览 (首行, 截断)。"""
+        text = (entry.get('text') or '').strip()
+        line = ' '.join(text.split('\n')[0].split()) if text else ''
+        if len(line) > 20:
+            line = line[:20] + '…'
+        return line or self.tr('hist_blank')
+
+    def _refresh_history_list(self):
+        if self.hist_list is None or not self.hist_list.winfo_exists():
+            return
+        self.hist_list.delete(0, 'end')
+        for e in self.history:
+            self.hist_list.insert('end', self._history_preview(e))
+        if self._hist_selected is not None and 0 <= self._hist_selected < len(self.history):
+            self.hist_list.selection_set(self._hist_selected)
+            self.hist_list.see(self._hist_selected)
+
+    def _add_history(self, text, select=False):
+        """把内容加入历史记录 (去重后置顶, 超出上限丢弃最旧)。"""
+        if not (text or '').strip():
+            return False
+        self.history = [e for e in self.history if e.get('text') != text]
+        self.history.insert(0, {'text': text,
+                                'ts': time.strftime('%m-%d %H:%M')})
+        del self.history[MAX_HISTORY:]
+        self._hist_selected = 0 if select else None
+        self._refresh_history_list()
+        self._save_settings()
+        return True
+
+    def save_to_history(self):
+        """把当前输入存入历史记录。"""
+        text = self.input_text.get('1.0', 'end-1c')
+        if not text.strip():
+            self._flash(self.tr('hist_empty_input'))
+            return
+        self._add_history(text, select=True)
+        self._flash(self.tr('hist_saved'))
+
+    def _on_history_select(self, event=None):
+        """点击历史记录: 载入输入框 (有内容时先询问)。"""
+        if self._hist_guard or not self.history:
+            return
+        sel = self.hist_list.curselection()
+        if not sel or sel[0] >= len(self.history):
+            return
+        entry = self.history[sel[0]]
+        text = entry.get('text', '')
+        current = self.input_text.get('1.0', 'end-1c')
+        if current.strip():
+            self._hist_guard = True
+            try:
+                choice = self._ask_overwrite()
+            finally:
+                self._hist_guard = False
+            if choice == 'cancel':
+                self.hist_list.selection_clear(0, 'end')
+                if self._hist_selected is not None and \
+                        0 <= self._hist_selected < len(self.history):
+                    self.hist_list.selection_set(self._hist_selected)
+                return
+            if choice == 'backup':
+                self._add_history(current)
+        self._load_into_input(text)
+        self._hist_selected = next(
+            (i for i, e in enumerate(self.history) if e.get('text') == text), None)
+        self._refresh_history_list()
+        ts = entry.get('ts')
+        self._flash(self.tr('hist_loaded', ts=f'({ts})') if ts
+                    else self.tr('hist_loaded_plain'))
+
+    def _load_into_input(self, text):
+        self.input_text.delete('1.0', 'end')
+        self.input_text.insert('1.0', text)
+        self.input_text.edit_reset()
+        self.input_text.mark_set('insert', '1.0')
+        self.input_text.see('1.0')
+        self.do_convert()
+        self.input_text.focus_set()
+
+    def delete_history(self):
+        sel = self.hist_list.curselection()
+        if not sel or sel[0] >= len(self.history):
+            self._flash(self.tr('hist_none_selected'))
+            return
+        del self.history[sel[0]]
+        self._hist_selected = None
+        self._refresh_history_list()
+        self._save_settings()
+        self._flash(self.tr('hist_deleted'))
+
+    def clear_history(self):
+        if not self.history:
+            self._flash(self.tr('hist_empty'))
+            return
+        if self._ask_confirm(self.tr('hist_clear_confirm')) != 'ok':
+            return
+        self.history = []
+        self._hist_selected = None
+        self._refresh_history_list()
+        self._save_settings()
+
+    # ---------- 对话框 ----------
+    def _ask_overwrite(self):
+        """输入框已有内容时的三选项询问。"""
+        return self._ask_dialog(
+            self.tr('hist_confirm_title'), self.tr('hist_confirm_msg'),
+            ((self.tr('hist_backup'), 'backup'),
+             (self.tr('hist_overwrite'), 'overwrite')),
+            self.tr('hist_cancel'))
+
+    def _ask_confirm(self, msg):
+        return self._ask_dialog(self.tr('hist_confirm_title'), msg,
+                                ((self.tr('hist_ok'), 'ok'),),
+                                self.tr('hist_cancel'))
+
+    def _ask_dialog(self, title, msg, options, cancel_text):
+        """通用模态对话框: options 为 [(按钮文字, 返回值), ...], 返回选中值或 'cancel'。"""
+        win = tk.Toplevel(self.root)
+        win.title(title)
+        win.transient(self.root)
+        win.resizable(False, False)
+        theme = THEMES['dark' if self.dark else 'light']
+        try:
+            if getattr(sys, 'frozen', False):
+                win.iconbitmap(default=sys.executable)
+            else:
+                win.iconbitmap(ICON_PATH)
+        except tk.TclError:
+            pass
+        frame = ttk.Frame(win, padding=14)
+        frame.pack(fill='both', expand=True)
+        ttk.Label(frame, text=msg, wraplength=400, justify='left').pack(anchor='w')
+        btns = ttk.Frame(frame)
+        btns.pack(fill='x', pady=(12, 0))
+        result = {'v': 'cancel'}
+
+        def choose(val):
+            result['v'] = val
+            win.destroy()
+
+        items = list(options) + [(cancel_text, 'cancel')]
+        for text, val in reversed(items):   # side='right' 逆序 pack -> 显示顺序不变
+            ttk.Button(btns, text=text,
+                       command=lambda v=val: choose(v)).pack(side='right', padx=(6, 0))
+        win.bind('<Escape>', lambda e: choose('cancel'))
+        win.protocol('WM_DELETE_WINDOW', lambda: choose('cancel'))
+        win.update_idletasks()
+        x = self.root.winfo_rootx() + max(0, (self.root.winfo_width() - win.winfo_width()) // 2)
+        y = self.root.winfo_rooty() + max(0, (self.root.winfo_height() - win.winfo_height()) // 3)
+        win.geometry(f'+{x}+{y}')
+        win.grab_set()
+        win.focus_set()
+        self.root.wait_window(win)
+        return result['v']
+
+    def _theme_sidebar(self):
+        """左侧历史侧栏配色 (AI 对话网页风格)。"""
+        theme = THEMES['dark' if self.dark else 'light']
+        sb_bg = '#171717' if self.dark else '#f5f5f7'
+        try:
+            style = ttk.Style()
+            style.configure('Sidebar.TFrame', background=sb_bg)
+            style.configure('Sidebar.TLabel', background=sb_bg,
+                            foreground=theme['text_fg'])
+        except tk.TclError:
+            pass
+        if getattr(self, 'hist_list', None) is not None and self.hist_list.winfo_exists():
+            self.hist_list.configure(
+                bg=sb_bg, fg=theme['text_fg'],
+                selectbackground='#264f78' if self.dark else '#c9e2ff',
+                selectforeground='#ffffff' if self.dark else '#000000',
+                highlightbackground=sb_bg)
 
     # ---------- 同步滚动 ----------
     def _scroll_both(self, *args):
@@ -1374,6 +1651,8 @@ class App:
                 self._apply_text_widget_theme(w)
         # 设置窗口自身的 tk 控件 (导航/内容区/取色按钮) 跟随主题
         self._theme_settings_dialog()
+        # 左侧历史侧栏配色
+        self._theme_sidebar()
 
     # ---------- 字体与颜色 ----------
     def _effective_color(self, key, kind):
@@ -1780,6 +2059,12 @@ class App:
         self.suffix_label.configure(text=self.tr('include_suffix'))
         self.theme_btn.configure(
             text=self.tr('theme_light' if self.dark else 'theme_dark'))
+        # 左侧历史侧栏文本
+        self.hist_title.configure(text=self.tr('hist_title'))
+        self.btn_hist_save.configure(text=self.tr('btn_hist_save'))
+        self.btn_hist_del.configure(text=self.tr('btn_hist_del'))
+        self.btn_hist_clear.configure(text=self.tr('btn_hist_clear'))
+        self._refresh_history_list()
 
     def _save_settings(self):
         fonts = {}
@@ -1806,6 +2091,8 @@ class App:
             'include_suffix': self.include_suffix.get(),
             'options': {k: self.enabled[k].get() for k in OPTION_ORDER},
             'fonts': fonts,
+            # 历史记录
+            'history': self.history,
             # 输入框状态记忆: 内容 + 光标位置 (防抖/关闭时保存)
             'last_input': self.input_text.get('1.0', 'end-1c'),
             'last_cursor': self.input_text.index('insert'),
