@@ -755,7 +755,7 @@ def _offset_to_index(offset, line_starts, total_len):
 
 THEMES = {
     'light': {
-        'ttk_theme': 'vista',
+        'ttk_theme': 'clam',      # clam 才能自定义布局(细滚动条/无箭头)
         'root_bg': '#f0f0f0',
         'text_bg': '#ffffff',
         'text_fg': '#000000',
@@ -767,6 +767,9 @@ THEMES = {
         'green_fg': '#1e8449', 'green_bg': '#eafaf1',
         'status_fg': '#1a6fb0',
         'hint_fg': '#667777',
+        'border': '#c8c8c8',
+        'btn_bg': '#e9e9e9', 'btn_active': '#dcdcdc', 'btn_pressed': '#d0d0d0',
+        'sb_thumb': '#c1c1c1', 'sb_thumb_active': '#a6a6a6',
     },
     'dark': {
         'ttk_theme': 'clam',
@@ -781,6 +784,9 @@ THEMES = {
         'green_fg': '#7ee787', 'green_bg': '#1f3d2b',
         'status_fg': '#79b8ff',
         'hint_fg': '#9d9d9d',
+        'border': '#3c3c3c',
+        'btn_bg': '#333333', 'btn_active': '#454545', 'btn_pressed': '#2a2a2a',
+        'sb_thumb': '#4a4a4a', 'sb_thumb_active': '#5c5c5c',
     },
 }
 
@@ -1024,8 +1030,9 @@ class ScrollableFrame(ttk.Frame):
         self.inner = ttk.Frame(self.canvas)
         self._win = self.canvas.create_window((0, 0), window=self.inner, anchor='nw')
         self.canvas.configure(yscrollcommand=self.vsb.set)
-        self.canvas.pack(side='left', fill='both', expand=True)
+        # 先 pack 滚动条, 避免 Canvas 占满宽度
         self.vsb.pack(side='right', fill='y')
+        self.canvas.pack(side='left', fill='both', expand=True)
         self.inner.bind('<Configure>', self._on_inner_configure)
         self.canvas.bind('<Configure>', self._on_canvas_configure)
         self.canvas.bind('<MouseWheel>', self.on_wheel)
@@ -1237,8 +1244,9 @@ class App:
                                   wrap='word', undo=True)
         self.in_scroll = ttk.Scrollbar(in_frame, command=self._scroll_both)
         self.input_text.configure(yscrollcommand=self.in_scroll.set)
-        self.input_text.pack(side='left', fill='both', expand=True)
+        # 先 pack 滚动条, 否则文本框会吃掉全部宽度使其不可见
         self.in_scroll.pack(side='right', fill='y')
+        self.input_text.pack(side='left', fill='both', expand=True)
 
         # ---- 输出区 ----
         self.output_label = ttk.Label(content, text=self.tr('output_label'))
@@ -1249,8 +1257,8 @@ class App:
                                    wrap='word')
         self.out_scroll = ttk.Scrollbar(out_frame, command=self._scroll_both)
         self.output_text.configure(yscrollcommand=self.out_scroll.set)
-        self.output_text.pack(side='left', fill='both', expand=True)
         self.out_scroll.pack(side='right', fill='y')
+        self.output_text.pack(side='left', fill='both', expand=True)
 
         # 两个文本框等高、均匀分配空间, 缩放行为一致
         content.rowconfigure(3, weight=1, uniform='texts')
@@ -1342,9 +1350,9 @@ class App:
                                     font=UI_FONT, width=16)
         self.hist_scroll = ttk.Scrollbar(list_wrap, orient='vertical',
                                          command=self.hist_list.yview)
-        self.hist_list.configure(yscrollcommand=self.hist_scroll.set)
+        self.hist_list.configure(yscrollcommand=self._hist_scroll_sync)
         self.hist_list.pack(side='left', fill='both', expand=True)
-        self.hist_scroll.pack(side='right', fill='y')
+        self._hist_sb_shown = False   # 滚动条仅在内容超出时显示
         self.hist_list.bind('<<ListboxSelect>>', self._on_history_select)
 
         hist_btns = ttk.Frame(sb, style='Sidebar.TFrame')
@@ -1360,6 +1368,22 @@ class App:
         self.btn_hist_clear = ttk.Button(row2, text=self.tr('btn_hist_clear'),
                                          command=self.clear_history)
         self.btn_hist_clear.pack(side='left', expand=True, fill='x', padx=(6, 0))
+
+    def _hist_scroll_sync(self, first, last):
+        """历史列表滚动条: 仅在内容超出可视范围时显示。"""
+        try:
+            first, last = float(first), float(last)
+        except (TypeError, ValueError):
+            return
+        need = not (first <= 0.0 and last >= 1.0)
+        if need and not self._hist_sb_shown:
+            self.hist_scroll.pack(side='right', fill='y',
+                                  before=self.hist_list)   # 保持在列表之前, 优先分配宽度
+            self._hist_sb_shown = True
+        elif not need and self._hist_sb_shown:
+            self.hist_scroll.pack_forget()
+            self._hist_sb_shown = False
+        self.hist_scroll.set(first, last)
 
     @staticmethod
     def _preview_text(text, limit=20):
@@ -1672,73 +1696,66 @@ class App:
         except tk.TclError:
             pass
         style.configure('.', font=UI_FONT)
-        if dark:
-            style.configure('.', background=theme['root_bg'],
-                            foreground=theme['text_fg'],
-                            fieldbackground=theme['text_bg'],
-                            bordercolor='#3c3c3c',
-                            lightcolor='#3c3c3c', darkcolor='#3c3c3c')
-            style.configure('TFrame', background=theme['root_bg'])
-            style.configure('TLabel', background=theme['root_bg'],
-                            foreground=theme['text_fg'])
-            style.configure('TLabelframe', background=theme['root_bg'],
-                            foreground=theme['text_fg'],
-                            bordercolor='#3c3c3c',
-                            lightcolor='#3c3c3c', darkcolor='#3c3c3c')
-            style.configure('TLabelframe.Label', background=theme['root_bg'],
-                            foreground=theme['text_fg'])
-            style.configure('TButton', background='#333333',
-                            foreground=theme['text_fg'],
-                            bordercolor='#3c3c3c', relief='flat')
-            style.map('TButton',
-                      background=[('active', '#454545'), ('pressed', '#2a2a2a')])
-            style.configure('TCheckbutton', background=theme['root_bg'],
-                            foreground=theme['text_fg'])
-            style.map('TCheckbutton', background=[('active', theme['root_bg'])])
-            style.configure('TScrollbar', background='#3c3c3c',
-                            troughcolor=theme['root_bg'],
-                            arrowcolor=theme['text_fg'],
-                            bordercolor=theme['root_bg'])
-            style.map('TScrollbar', background=[('active', '#4a4a4a')])
-            # 下拉框 / 数字框: 暗色字段, 浅色文字 (否则白底浅字看不清)
-            style.configure('TCombobox',
-                            fieldbackground=theme['text_bg'],
-                            background=theme['root_bg'],
-                            foreground=theme['text_fg'],
-                            arrowcolor=theme['text_fg'],
-                            bordercolor='#3c3c3c',
-                            lightcolor='#3c3c3c', darkcolor='#3c3c3c')
-            style.map('TCombobox',
+        bg = theme['root_bg']
+        fg = theme['text_fg']
+        border = theme['border']
+        sel_bg = '#264f78' if dark else '#c9e2ff'
+        sel_fg = '#ffffff' if dark else '#000000'
+        style.configure('.', background=bg, foreground=fg,
+                        fieldbackground=theme['text_bg'],
+                        bordercolor=border,
+                        lightcolor=border, darkcolor=border)
+        style.configure('TFrame', background=bg)
+        style.configure('TLabel', background=bg, foreground=fg)
+        style.configure('TLabelframe', background=bg, foreground=fg,
+                        bordercolor=border, lightcolor=border, darkcolor=border)
+        style.configure('TLabelframe.Label', background=bg, foreground=fg)
+        style.configure('TButton', background=theme['btn_bg'], foreground=fg,
+                        bordercolor=border, lightcolor=border,
+                        darkcolor=border, relief='flat', padding=(8, 2))
+        style.map('TButton',
+                  background=[('active', theme['btn_active']),
+                              ('pressed', theme['btn_pressed'])])
+        style.configure('TCheckbutton', background=bg, foreground=fg)
+        style.map('TCheckbutton', background=[('active', bg)])
+        # 细滚动条 + 隐藏上下箭头 (只保留滑块与滑槽)
+        # 注: clam 下滚动条粗细由 arrowsize 决定, 布局中已无箭头元素故不会画出箭头
+        style.layout('Vertical.TScrollbar', [
+            ('Vertical.Scrollbar.trough', {'sticky': 'ns', 'children': [
+                ('Vertical.Scrollbar.thumb',
+                 {'expand': '1', 'sticky': 'nswe'})]})])
+        style.layout('Horizontal.TScrollbar', [
+            ('Horizontal.Scrollbar.trough', {'sticky': 'ew', 'children': [
+                ('Horizontal.Scrollbar.thumb',
+                 {'expand': '1', 'sticky': 'nswe'})]})])
+        style.configure('TScrollbar', width=9, arrowsize=9, relief='flat',
+                        borderwidth=0, background=theme['sb_thumb'],
+                        troughcolor=bg, bordercolor=bg,
+                        lightcolor=theme['sb_thumb'],
+                        darkcolor=theme['sb_thumb'])
+        style.map('TScrollbar',
+                  background=[('active', theme['sb_thumb_active']),
+                              ('pressed', theme['sb_thumb_active'])])
+        # 下拉框 / 数字框 / 输入框: 字段色 + 可读文字
+        for st in ('TCombobox', 'TSpinbox', 'TEntry'):
+            style.configure(st, fieldbackground=theme['text_bg'],
+                            foreground=fg, arrowcolor=fg, bordercolor=border,
+                            lightcolor=border, darkcolor=border)
+            style.map(st,
                       fieldbackground=[('readonly', theme['text_bg'])],
-                      foreground=[('readonly', theme['text_fg'])],
-                      selectbackground=[('readonly', '#264f78')],
-                      selectforeground=[('readonly', '#ffffff')])
-            style.configure('TSpinbox',
-                            fieldbackground=theme['text_bg'],
-                            foreground=theme['text_fg'],
-                            arrowcolor=theme['text_fg'],
-                            bordercolor='#3c3c3c',
-                            lightcolor='#3c3c3c', darkcolor='#3c3c3c')
-            style.map('TSpinbox',
-                      fieldbackground=[('readonly', theme['text_bg'])],
-                      foreground=[('readonly', theme['text_fg'])])
-            style.configure('TEntry',
-                            fieldbackground=theme['text_bg'],
-                            foreground=theme['text_fg'],
-                            insertcolor=theme['text_fg'],
-                            bordercolor='#3c3c3c',
-                            lightcolor='#3c3c3c', darkcolor='#3c3c3c')
-            style.map('TEntry',
-                      fieldbackground=[('readonly', theme['text_bg'])],
-                      foreground=[('readonly', theme['text_fg'])])
-            # 下拉弹出列表 (Combobox popdown)
-            for opt, val in (
-                ('*TCombobox*Listbox.background', theme['text_bg']),
-                ('*TCombobox*Listbox.foreground', theme['text_fg']),
-                ('*TCombobox*Listbox.selectBackground', '#264f78'),
-                ('*TCombobox*Listbox.selectForeground', '#ffffff'),
-            ):
-                self.root.option_add(opt, val)
+                      foreground=[('readonly', fg)])
+        style.configure('TEntry', insertcolor=fg)
+        style.map('TCombobox',
+                  selectbackground=[('readonly', sel_bg)],
+                  selectforeground=[('readonly', sel_fg)])
+        # 下拉弹出列表 (Combobox popdown)
+        for opt, val in (
+            ('*TCombobox*Listbox.background', theme['text_bg']),
+            ('*TCombobox*Listbox.foreground', theme['text_fg']),
+            ('*TCombobox*Listbox.selectBackground', sel_bg),
+            ('*TCombobox*Listbox.selectForeground', sel_fg),
+        ):
+            self.root.option_add(opt, val)
         self.root.configure(bg=theme['root_bg'])
         for w in (self.input_text, self.output_text):
             w.configure(bg=theme['text_bg'], fg=theme['text_fg'],
