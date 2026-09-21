@@ -118,6 +118,8 @@ STRINGS = {
         'hist_deleted': '已删除选中记录。',
         'hist_none_selected': '请先选择一条历史记录。',
         'hist_clear_confirm': '确定清空全部历史记录? 此操作不可撤销。',
+        'hist_delete_confirm': '确定删除选中的历史记录? 此操作不可撤销。',
+        'confirm_title': '请确认',
         'hist_ok': '确定',
         'hist_cancel': '取消',
         'hist_confirm_title': '输入框已有内容',
@@ -205,6 +207,8 @@ STRINGS = {
         'hist_deleted': 'Entry deleted.',
         'hist_none_selected': 'Select a history entry first.',
         'hist_clear_confirm': 'Clear all history? This cannot be undone.',
+        'hist_delete_confirm': 'Delete the selected history entry? This cannot be undone.',
+        'confirm_title': 'Please confirm',
         'hist_ok': 'OK',
         'hist_cancel': 'Cancel',
         'hist_confirm_title': 'Input is not empty',
@@ -1391,6 +1395,11 @@ class App:
         entry = self.history[sel[0]]
         text = entry.get('text', '')
         current = self.input_text.get('1.0', 'end-1c')
+        if current == text:
+            # 内容与所选历史记录完全相同: 无需询问, 也无需重新载入
+            self._hist_selected = sel[0]
+            self._refresh_history_list()
+            return
         if current.strip():
             self._hist_guard = True
             try:
@@ -1427,6 +1436,8 @@ class App:
         if not sel or sel[0] >= len(self.history):
             self._flash(self.tr('hist_none_selected'))
             return
+        if self._ask_confirm(self.tr('hist_delete_confirm')) != 'ok':
+            return
         del self.history[sel[0]]
         self._hist_selected = None
         self._refresh_history_list()
@@ -1454,7 +1465,7 @@ class App:
             self.tr('hist_cancel'))
 
     def _ask_confirm(self, msg):
-        return self._ask_dialog(self.tr('hist_confirm_title'), msg,
+        return self._ask_dialog(self.tr('confirm_title'), msg,
                                 ((self.tr('hist_ok'), 'ok'),),
                                 self.tr('hist_cancel'))
 
