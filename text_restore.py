@@ -419,14 +419,18 @@ _CN_DIGITS = {'零': 0, '〇': 0, '一': 1, '二': 2, '两': 2, '三': 3, '四':
               '五': 5, '六': 6, '七': 7, '八': 8, '九': 9}
 _NUM = r'(?:\d{1,4}|[零〇一二两三四五六七八九十百千]{1,8})'
 _AP = r'凌晨|清晨|早上|上午|中午|正午|下午|傍晚|晚上|深夜|晚'
+# 时间尾部: 点[半][M分][S秒][钟]
+_TIME_TAIL = (r'\s*点\s*(?P<half>半)?'
+              r'(?:\s*(?P<mi>' + _NUM + r')\s*分)?'
+              r'(?:\s*(?P<se>' + _NUM + r')\s*秒)?'
+              r'\s*(?P<zh>钟)?')
 
 _RE_DATETIME = re.compile(
     r'(?:(?P<ap1>' + _AP + r')\s*)?(?<!\d)(?P<y>' + _NUM + r')\s*年\s*'
     r'(?P<m>' + _NUM + r')\s*月\s*'
     r'(?P<d>' + _NUM + r')\s*[日号]?'
-    r'(?:\s*(?:(?P<ap2>' + _AP + r')\s*)?(?<!\d)(?P<h>' + _NUM + r')\s*点'
-    r'(?:\s*(?P<mi>' + _NUM + r')\s*分)?'
-    r'(?:\s*(?P<se>' + _NUM + r')\s*秒)?)?'
+    r'(?:\s*(?:(?P<ap2>' + _AP + r')\s*)?(?<!\d)(?P<h>' + _NUM + r')'
+    + _TIME_TAIL + r')?'
 )
 _RE_YEAR_MONTH = re.compile(
     r'(?<!\d)(?P<y>' + _NUM + r')\s*年\s*(?P<m>' + _NUM + r')\s*月(?!\d)'
@@ -435,9 +439,8 @@ _RE_MONTH_DAY = re.compile(
     r'(?<!\d)(?P<m>' + _NUM + r')\s*月\s*(?P<d>' + _NUM + r')\s*[日号]'
 )
 _RE_TIME = re.compile(
-    r'(?:(?P<ap>' + _AP + r')\s*)?(?<!\d)(?P<h>' + _NUM + r')\s*点'
-    r'(?:\s*(?P<mi>' + _NUM + r')\s*分)?'
-    r'(?:\s*(?P<se>' + _NUM + r')\s*秒)?'
+    r'(?:(?P<ap>' + _AP + r')\s*)?(?<!\d)(?P<h>' + _NUM + r')'
+    + _TIME_TAIL
 )
 
 
@@ -481,7 +484,7 @@ def _int_of(m, name):
     return _cn_to_int(m.group(name))
 
 
-def _format_hms(ap, h, mi, se):
+def _format_hms(ap, h, mi, se, half=False):
     """把 点/分/秒 与上下午标记格式化为 24 小时制 HH:MM[:SS]。"""
     if h is None or not (0 <= h <= 23):
         return None
@@ -497,6 +500,8 @@ def _format_hms(ap, h, mi, se):
             h = 0
     if not (0 <= h <= 23):
         return None
+    if half:
+        mi = 30
     if mi is not None and not (0 <= mi <= 59):
         return None
     if se is not None and not (0 <= se <= 59):
@@ -505,6 +510,24 @@ def _format_hms(ap, h, mi, se):
     if se is not None:
         out += f':{se:02d}'
     return out
+
+
+def _has_time_marker(m):
+    """"点"是否有消歧标记 (上下午/分/秒/半/钟), 或小时是阿拉伯数字。
+
+    中文数字的"X点"在中文里常表示量词(一点=少许/两点意见/晚一点),
+    无强标记时不转换; 裸"晚"只算弱标记, 仅配合阿拉伯数字生效(晚8点)。
+    """
+    g = m.groupdict()
+    h = g.get('h') or ''
+    if h.isdigit():
+        return True          # 阿拉伯/全角数字 + 点, 基本都是时间
+    for key in ('ap', 'ap2'):
+        ap = g.get(key)
+        if ap and ap != '晚':
+            return True      # 上午/下午/晚上... 等强标记
+    return bool(g.get('half') or g.get('zh')
+                or g.get('mi') or g.get('se'))
 
 
 def _format_datetime(m):
@@ -516,7 +539,8 @@ def _format_datetime(m):
     if h is None:
         return date
     ts = _format_hms(m.group('ap2') or m.group('ap1'), h,
-                     _int_of(m, 'mi'), _int_of(m, 'se'))
+                     _int_of(m, 'mi'), _int_of(m, 'se'),
+                     half=bool(m.group('half')))
     if ts is None:
         return None
     return f'{date} {ts}'
@@ -537,8 +561,11 @@ def _format_month_day(m):
 
 
 def _format_time(m):
+    if not _has_time_marker(m):
+        return None   # 无消歧标记的中文数字"X点" -> 量词, 不转换
     return _format_hms(m.group('ap'), _int_of(m, 'h'),
-                       _int_of(m, 'mi'), _int_of(m, 'se'))
+                       _int_of(m, 'mi'), _int_of(m, 'se'),
+                       half=bool(m.group('half')))
 
 
 def _find_datetime_segments(text):
