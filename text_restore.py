@@ -128,6 +128,14 @@ STRINGS = {
         'hist_rename_title': '重命名历史记录',
         'hist_rename_msg': '输入新的名称 (留空则恢复为内容预览):',
         'hist_renamed': '已重命名 ✓',
+        'hist_save_edit': '保存编辑',
+        'hist_edit_saved': '已保存对该记录的修改 ✓',
+        'hist_no_edit': '当前记录没有修改。',
+        'hist_unsaved_title': '有未保存的修改',
+        'hist_unsaved_msg': ('当前历史记录有未保存的修改, 是否保存?\n'
+                             '(选择"不保存"将丢弃这些修改)'),
+        'hist_save': '保存',
+        'hist_discard': '不保存',
         'hist_loaded': '已载入历史记录 {ts}',
         'hist_loaded_plain': '已载入历史记录',
         'hist_blank': '(空)',
@@ -218,6 +226,14 @@ STRINGS = {
         'hist_rename_title': 'Rename history entry',
         'hist_rename_msg': 'Enter a new name (leave empty to use the content preview):',
         'hist_renamed': 'Renamed ✓',
+        'hist_save_edit': 'Save edit',
+        'hist_edit_saved': 'Changes saved to this entry ✓',
+        'hist_no_edit': 'No changes to save.',
+        'hist_unsaved_title': 'Unsaved changes',
+        'hist_unsaved_msg': ('This history entry has unsaved changes. Save them?\n'
+                             '(choosing "Don\'t save" discards them)'),
+        'hist_save': 'Save',
+        'hist_discard': "Don't save",
         'hist_loaded': 'Loaded history entry {ts}',
         'hist_loaded_plain': 'Loaded history entry',
         'hist_blank': '(empty)',
@@ -796,6 +812,7 @@ THEMES = {
         'hint_fg': '#667777',
         'border': '#c8c8c8',
         'btn_bg': '#e9e9e9', 'btn_active': '#dcdcdc', 'btn_pressed': '#d0d0d0',
+        'accent': '#2f6fe0', 'accent_active': '#245bbd',
         'sb_thumb': '#c1c1c1', 'sb_thumb_active': '#a6a6a6',
     },
     'dark': {
@@ -813,6 +830,7 @@ THEMES = {
         'hint_fg': '#9d9d9d',
         'border': '#3c3c3c',
         'btn_bg': '#333333', 'btn_active': '#454545', 'btn_pressed': '#2a2a2a',
+        'accent': '#3b82f6', 'accent_active': '#2f6fe0',
         'sb_thumb': '#4a4a4a', 'sb_thumb_active': '#5c5c5c',
     },
 }
@@ -1369,6 +1387,13 @@ class App:
                                         command=self.save_to_history)
         self.btn_hist_save.pack(fill='x')
 
+        # 保存编辑: 仅在当前历史记录被修改后点亮可用
+        self.btn_hist_save_edit = ttk.Button(sb, text=self.tr('hist_save_edit'),
+                                             command=self.save_history_edit,
+                                             state='disabled')
+        self.btn_hist_save_edit.pack(fill='x', pady=(6, 0))
+        self._edit_btn_on = False
+
         list_wrap = ttk.Frame(sb, style='Sidebar.TFrame')
         list_wrap.pack(fill='both', expand=True, pady=(8, 0))
         self.hist_list = tk.Listbox(list_wrap, activestyle='none',
@@ -1459,6 +1484,71 @@ class App:
         if self._current_slot in (0, None):
             self.draft = self.input_text.get('1.0', 'end-1c')
 
+    # ---------- 编辑历史记录 ----------
+    def _is_dirty(self):
+        """当前激活的历史记录是否被修改过 (未保存)。"""
+        slot = self._current_slot
+        if slot is None or slot == 0 or slot - 1 >= len(self.history):
+            return False
+        return self.input_text.get('1.0', 'end-1c') != self.history[slot - 1].get('text', '')
+
+    def _update_edit_state(self):
+        """根据是否有未保存修改, 点亮/置灰"保存编辑"按钮。"""
+        dirty = self._is_dirty()
+        if dirty == self._edit_btn_on:
+            return
+        self._edit_btn_on = dirty
+        try:
+            if dirty:
+                self.btn_hist_save_edit.configure(state='normal',
+                                                  style='Accent.TButton')
+            else:
+                self.btn_hist_save_edit.configure(state='disabled',
+                                                  style='TButton')
+        except tk.TclError:
+            pass
+
+    def _store_edit(self):
+        """把当前输入写回激活的历史记录。"""
+        slot = self._current_slot
+        if slot is None or slot == 0 or slot - 1 >= len(self.history):
+            return False
+        self.history[slot - 1]['text'] = self.input_text.get('1.0', 'end-1c')
+        self._refresh_history_list()
+        self._save_settings()
+        self._update_edit_state()
+        return True
+
+    def save_history_edit(self):
+        """"保存编辑"按钮: 保存对当前历史记录的修改。"""
+        if self._current_slot in (None, 0):
+            self._flash(self.tr('hist_select_entry'))
+            return
+        if not self._is_dirty():
+            self._flash(self.tr('hist_no_edit'))
+            return
+        self._store_edit()
+        self._flash(self.tr('hist_edit_saved'))
+
+    def _ask_save_edit(self):
+        """未保存修改的三选项询问: 'save' / 'discard' / 'cancel'。"""
+        return self._ask_dialog(self.tr('hist_unsaved_title'),
+                                self.tr('hist_unsaved_msg'),
+                                ((self.tr('hist_save'), 'save'),
+                                 (self.tr('hist_discard'), 'discard')),
+                                self.tr('hist_cancel'))
+
+    def _confirm_pending_edit(self):
+        """有未保存修改时询问; 返回 False 表示用户取消了本次切换/关闭。"""
+        if not self._is_dirty():
+            return True
+        choice = self._ask_save_edit()
+        if choice == 'cancel':
+            return False
+        if choice == 'save':
+            self._store_edit()
+        return True
+
     def _add_history(self, text, select=False):
         """把内容加入历史记录 (去重后置顶, 超出上限丢弃最旧)。"""
         if not (text or '').strip():
@@ -1471,6 +1561,7 @@ class App:
         self._current_slot = 1 if select else None
         self._refresh_history_list()
         self._save_settings()
+        self._update_edit_state()
         return True
 
     def save_to_history(self):
@@ -1496,6 +1587,10 @@ class App:
         slot = sel[0]
         if slot > len(self.history) or slot == self._current_slot:
             return
+        if not self._confirm_pending_edit():
+            # 用户取消: 恢复原选中项
+            self._refresh_history_list()
+            return
         self._sync_draft()
         if slot == 0:
             self._load_into_input(self.draft)
@@ -1508,6 +1603,7 @@ class App:
                 else self.tr('hist_loaded_plain')
         self._current_slot = slot
         self._refresh_history_list()
+        self._update_edit_state()
         self._flash(msg)
 
     def rename_history(self):
@@ -1534,6 +1630,7 @@ class App:
         self.input_text.mark_set('insert', '1.0')
         self.input_text.see('1.0')
         self.do_convert()
+        self._update_edit_state()
         self.input_text.focus_set()
 
     def delete_history(self):
@@ -1547,6 +1644,7 @@ class App:
         self._current_slot = None
         self._refresh_history_list()
         self._save_settings()
+        self._update_edit_state()
         self._flash(self.tr('hist_deleted'))
 
     def clear_history(self):
@@ -1559,6 +1657,7 @@ class App:
         self._current_slot = None
         self._refresh_history_list()
         self._save_settings()
+        self._update_edit_state()
 
     # ---------- 对话框 ----------
     def _ask_confirm(self, msg):
@@ -1743,6 +1842,15 @@ class App:
         style.map('TButton',
                   background=[('active', theme['btn_active']),
                               ('pressed', theme['btn_pressed'])])
+        # 强调按钮 (历史记录"保存编辑"点亮时使用)
+        style.configure('Accent.TButton', background=theme['accent'],
+                        foreground='#ffffff', bordercolor=theme['accent'],
+                        lightcolor=theme['accent'], darkcolor=theme['accent'],
+                        relief='flat', padding=(8, 2))
+        style.map('Accent.TButton',
+                  background=[('active', theme['accent_active']),
+                              ('pressed', theme['accent_active'])],
+                  foreground=[('disabled', '#ffffff')])
         style.configure('TCheckbutton', background=bg, foreground=fg)
         style.map('TCheckbutton', background=[('active', bg)])
         # 细滚动条 + 隐藏上下箭头 (只保留滑块与滑槽)
@@ -2216,6 +2324,7 @@ class App:
         # 左侧历史侧栏文本
         self.hist_title.configure(text=self.tr('hist_title'))
         self.btn_hist_save.configure(text=self.tr('btn_hist_save'))
+        self.btn_hist_save_edit.configure(text=self.tr('hist_save_edit'))
         self.btn_hist_rename.configure(text=self.tr('hist_rename'))
         self.btn_hist_del.configure(text=self.tr('btn_hist_del'))
         self.btn_hist_clear.configure(text=self.tr('btn_hist_clear'))
@@ -2402,6 +2511,8 @@ class App:
         self.root.after_idle(self._refresh_mirror)
         # 输入状态变化 -> 防抖保存 (停止输入 600ms 后落盘)
         self._schedule_state_save()
+        # 历史记录编辑状态 (点亮"保存编辑"按钮)
+        self._update_edit_state()
 
     def _schedule_state_save(self):
         if self._save_after is not None:
@@ -2417,7 +2528,9 @@ class App:
         self._refresh_history_list()   # 刷新"新记录"槽的预览
 
     def _on_close(self):
-        """窗口关闭: 取消防抖计时并立即保存输入状态。"""
+        """窗口关闭: 先确认未保存的历史记录修改, 再保存输入状态。"""
+        if not self._confirm_pending_edit():
+            return          # 用户取消关闭
         if self._save_after is not None:
             try:
                 self.root.after_cancel(self._save_after)
