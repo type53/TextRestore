@@ -84,8 +84,8 @@ STRINGS = {
         'btn_done': '完成',
         'theme_dark': '深色主题',
         'theme_light': '浅色主题',
-        'include_prefix': '包含前缀',
-        'include_suffix': '包含后缀',
+        'label_prefix': '前缀:',
+        'label_suffix': '后缀:',
         'legend_red': '■ 输入中被替换的字符',
         'legend_green': '■ 输出中还原后的字符',
         'nav_options': '还原选项',
@@ -94,9 +94,15 @@ STRINGS = {
         'sec_options': '还原选项',
         'sec_prefix': '前后缀 (附加到输出结果)',
         'opt_hint': '改动即时生效并自动保存。',
-        'prefix_label': '前缀 (支持多行):',
-        'suffix_label': '后缀 (支持多行):',
-        'prefix_hint': '在主界面勾选"包含前缀 / 包含后缀"后附加到输出结果。',
+        'pf_none': 'None',
+        'pf_prefix_list': '前缀列表',
+        'pf_suffix_list': '后缀列表',
+        'pf_add': '＋ 添加',
+        'pf_name': '名称',
+        'pf_content': '内容',
+        'pf_empty': '(暂无, 点击"＋ 添加")',
+        'pf_hint': ('名称显示在主界面的下拉框中供选择, 内容才是实际附加到输出结果的文本; '
+                    '主界面选择 "None" 表示不附加。'),
         'appearance_hint': ('输入框与输出框可分别设置字体、字号、替换字符颜色与高亮颜色。'
                             '颜色留空(点击"恢复默认")即跟随主题。'),
         'font_label': '字体:',
@@ -181,8 +187,8 @@ STRINGS = {
         'btn_done': 'Done',
         'theme_dark': 'Dark',
         'theme_light': 'Light',
-        'include_prefix': 'Include prefix',
-        'include_suffix': 'Include suffix',
+        'label_prefix': 'Prefix:',
+        'label_suffix': 'Suffix:',
         'legend_red': '■ Replaced in input',
         'legend_green': '■ Restored in output',
         'nav_options': 'Options',
@@ -191,9 +197,16 @@ STRINGS = {
         'sec_options': 'Conversion Options',
         'sec_prefix': 'Prefix & Suffix (appended to output)',
         'opt_hint': 'Changes apply immediately and are saved automatically.',
-        'prefix_label': 'Prefix (multi-line):',
-        'suffix_label': 'Suffix (multi-line):',
-        'prefix_hint': 'Enable "Include prefix / Include suffix" on the main window to append them.',
+        'pf_none': 'None',
+        'pf_prefix_list': 'Prefix list',
+        'pf_suffix_list': 'Suffix list',
+        'pf_add': '＋ Add',
+        'pf_name': 'Name',
+        'pf_content': 'Content',
+        'pf_empty': '(none yet — click "＋ Add")',
+        'pf_hint': ('The name appears in the main-window dropdown; the content is what is '
+                    'actually appended to the output. Choose "None" on the main window to '
+                    'append nothing.'),
         'appearance_hint': ('Set font, size, replaced-character colors and highlight colors for '
                             'the input and output boxes separately. Leave a color empty '
                             '(click "Reset to theme default") to follow the theme.'),
@@ -1168,10 +1181,14 @@ class App:
         self.lang = cfg.get('lang') or _detect_lang()
         if self.lang not in STRINGS:
             self.lang = 'zh'
-        self.prefix_var = tk.StringVar(value=cfg.get('prefix', ''))
-        self.suffix_var = tk.StringVar(value=cfg.get('suffix', ''))
-        self.include_prefix = tk.BooleanVar(value=bool(cfg.get('include_prefix', False)))
-        self.include_suffix = tk.BooleanVar(value=bool(cfg.get('include_suffix', False)))
+        # 前后缀: 具名列表 (名称 + 内容) + 当前选择 (下标, -1 表示 None)
+        self.prefixes, self.suffixes, psel, ssel = self._load_pf(cfg)
+        self.prefix_sel = psel if isinstance(psel, int) and \
+            0 <= psel < len(self.prefixes) else -1
+        self.suffix_sel = ssel if isinstance(ssel, int) and \
+            0 <= ssel < len(self.suffixes) else -1
+        self._pf_boxes = {}       # 设置页中两侧列表的容器
+        self._pf_locked = False   # 重建列表行时抑制回调
         opts = cfg.get('options', {})
         self.enabled = {k: tk.BooleanVar(value=bool(opts.get(k, True)))
                         for k in OPTION_ORDER}
@@ -1324,9 +1341,26 @@ class App:
                                       foreground='#1a6fb0')
         self.status_label.grid(row=6, column=0, sticky='w', pady=(10, 0))
 
-        # ---- 底部: 复制/清空/设置 + 前后缀开关 + 主题 ----
+        # ---- 前后缀选择 (具名列表, None 表示不附加) ----
+        pf_row = ttk.Frame(content)
+        pf_row.grid(row=7, column=0, sticky='ew', pady=(8, 0))
+        self.prefix_label = ttk.Label(pf_row, text=self.tr('label_prefix'))
+        self.prefix_label.pack(side='left')
+        self.prefix_combo = ttk.Combobox(pf_row, state='readonly', width=18)
+        self.prefix_combo.pack(side='left', padx=(4, 0))
+        self.prefix_combo.bind('<<ComboboxSelected>>',
+                               lambda e: self._on_pf_selected('prefix'))
+        self.suffix_label = ttk.Label(pf_row, text=self.tr('label_suffix'))
+        self.suffix_label.pack(side='left', padx=(16, 0))
+        self.suffix_combo = ttk.Combobox(pf_row, state='readonly', width=18)
+        self.suffix_combo.pack(side='left', padx=(4, 0))
+        self.suffix_combo.bind('<<ComboboxSelected>>',
+                               lambda e: self._on_pf_selected('suffix'))
+        self._refresh_pf_combos()
+
+        # ---- 底部: 复制/清空/设置 + 主题 ----
         bottom = ttk.Frame(content)
-        bottom.grid(row=7, column=0, sticky='ew', pady=(6, 0))
+        bottom.grid(row=8, column=0, sticky='ew', pady=(6, 0))
         self.btn_copy = ttk.Button(bottom, text=self.tr('btn_copy'),
                                    command=self.copy_result)
         self.btn_copy.pack(side='left')
@@ -1336,19 +1370,6 @@ class App:
         self.btn_settings = ttk.Button(bottom, text=self.tr('btn_settings'),
                                        command=self.open_settings)
         self.btn_settings.pack(side='left')
-        self.prefix_label = ttk.Label(bottom, text=self.tr('include_prefix'))
-        self.prefix_label.pack(side='left', padx=(16, 4))
-        sw1 = Switch(bottom, variable=self.include_prefix,
-                     command=self._on_setting_changed, dark=self.dark,
-                     bg=THEMES['dark' if self.dark else 'light']['root_bg'])
-        sw1.pack(side='left')
-        self.suffix_label = ttk.Label(bottom, text=self.tr('include_suffix'))
-        self.suffix_label.pack(side='left', padx=(16, 4))
-        sw2 = Switch(bottom, variable=self.include_suffix,
-                     command=self._on_setting_changed, dark=self.dark,
-                     bg=THEMES['dark' if self.dark else 'light']['root_bg'])
-        sw2.pack(side='left')
-        self._switches.extend([sw1, sw2])
         self.theme_btn = ttk.Button(bottom, text=self.tr('theme_dark'),
                                     command=self.toggle_theme)
         self.theme_btn.pack(side='right', padx=(0, 8))
@@ -1906,11 +1927,6 @@ class App:
         for sw in self._switches:
             if sw.winfo_exists():
                 sw.set_dark(dark, theme['root_bg'])
-        # 设置窗口中的文本框也跟随主题
-        for w in (getattr(self, 'prefix_edit', None),
-                  getattr(self, 'suffix_edit', None)):
-            if w is not None and w.winfo_exists():
-                self._apply_text_widget_theme(w)
         # 设置窗口自身的 tk 控件 (导航/内容区/取色按钮) 跟随主题
         self._theme_settings_dialog()
         # 左侧历史侧栏配色
@@ -1957,16 +1973,6 @@ class App:
         # 图例颜色跟随输入/输出的替换字符前景色
         self.legend_red.configure(foreground=self._effective_color('input', 'diff_fg'))
         self.legend_green.configure(foreground=self._effective_color('output', 'diff_fg'))
-        # 设置窗口中的前缀/后缀编辑框使用输入框字体
-        for w in (getattr(self, 'prefix_edit', None),
-                  getattr(self, 'suffix_edit', None)):
-            if w is not None and w.winfo_exists():
-                fam = self.font_vars['input']['family'].get().strip() or TEXT_FONT[0]
-                try:
-                    size = int(float(self.font_vars['input']['size'].get()))
-                except (TypeError, ValueError):
-                    size = TEXT_FONT[1]
-                w.configure(font=(fam, size))
 
     def _font_list_cached(self):
         if self._font_list is None:
@@ -2176,27 +2182,199 @@ class App:
                      lambda e: self._on_lang_change(lang_cb.get()))
         return sec
 
+    # ---------- 前后缀 (具名列表 + 主界面下拉选择) ----------
+    def _load_pf(self, cfg):
+        """读取前后缀列表; 兼容旧版 prefix/suffix + include_* 配置。"""
+        def norm(e):
+            if isinstance(e, str):
+                return {'name': self._preview_text(e, 12), 'content': e}
+            if isinstance(e, dict):
+                return {'name': str(e.get('name') or ''),
+                        'content': str(e.get('content') or '')}
+            return None
+
+        pf = [x for x in (norm(e) for e in (cfg.get('prefixes') or [])) if x]
+        sf = [x for x in (norm(e) for e in (cfg.get('suffixes') or [])) if x]
+        psel, ssel = cfg.get('prefix_sel'), cfg.get('suffix_sel')
+        # 旧配置迁移: 把原来的前缀/后缀文本变成一条具名记录
+        if not pf and isinstance(cfg.get('prefix'), str) and cfg['prefix'].strip():
+            pf = [{'name': self._preview_text(cfg['prefix'], 12),
+                   'content': cfg['prefix']}]
+            psel = 0 if cfg.get('include_prefix') else -1
+        if not sf and isinstance(cfg.get('suffix'), str) and cfg['suffix'].strip():
+            sf = [{'name': self._preview_text(cfg['suffix'], 12),
+                   'content': cfg['suffix']}]
+            ssel = 0 if cfg.get('include_suffix') else -1
+        return pf, sf, psel, ssel
+
+    def _pf_items(self, kind):
+        return self.prefixes if kind == 'prefix' else self.suffixes
+
+    def _pf_sel(self, kind):
+        return self.prefix_sel if kind == 'prefix' else self.suffix_sel
+
+    def _set_pf_sel(self, kind, idx):
+        if kind == 'prefix':
+            self.prefix_sel = idx
+        else:
+            self.suffix_sel = idx
+
+    def _pf_display(self, entry):
+        """下拉框/列表显示的名称: 名称为空时退回内容预览。"""
+        name = (entry.get('name') or '').strip()
+        if name:
+            return name
+        return self._preview_text(entry.get('content'), 12) or self.tr('hist_blank')
+
+    def _pf_values(self, kind):
+        return [self.tr('pf_none')] + [self._pf_display(e) for e in self._pf_items(kind)]
+
+    def selected_pf(self, kind):
+        """当前选中的前后缀内容 (未选择/None 时为空串)。"""
+        items = self._pf_items(kind)
+        i = self._pf_sel(kind)
+        if 0 <= i < len(items):
+            return items[i].get('content', '')
+        return ''
+
+    def _refresh_pf_combos(self):
+        for kind, combo in (('prefix', getattr(self, 'prefix_combo', None)),
+                            ('suffix', getattr(self, 'suffix_combo', None))):
+            if combo is None or not combo.winfo_exists():
+                continue
+            combo['values'] = self._pf_values(kind)
+            i = self._pf_sel(kind)
+            combo.current(i + 1 if 0 <= i < len(self._pf_items(kind)) else 0)
+
+    def _on_pf_selected(self, kind):
+        combo = self.prefix_combo if kind == 'prefix' else self.suffix_combo
+        idx = combo.current() - 1          # 第 0 项是 None
+        if idx == self._pf_sel(kind):
+            return
+        self._set_pf_sel(kind, idx)
+        self._save_settings()
+        self.do_convert()
+
     def _build_section_prefix(self):
         theme = THEMES['dark' if self.dark else 'light']
         sec = ttk.Frame(self._settings_inner)
         sec.pack(fill='x')
         pf_frame = ttk.LabelFrame(sec, text=self.tr('sec_prefix'), padding=8)
         pf_frame.pack(fill='x')
-        ttk.Label(pf_frame, text=self.tr('prefix_label')).pack(anchor='w')
-        self.prefix_edit = tk.Text(pf_frame, height=3, font=TEXT_FONT, wrap='word')
-        self._apply_text_widget_theme(self.prefix_edit)
-        self.prefix_edit.pack(fill='x')
-        self.prefix_edit.insert('1.0', self.prefix_var.get())
-        ttk.Label(pf_frame, text=self.tr('suffix_label')).pack(anchor='w', pady=(6, 0))
-        self.suffix_edit = tk.Text(pf_frame, height=3, font=TEXT_FONT, wrap='word')
-        self._apply_text_widget_theme(self.suffix_edit)
-        self.suffix_edit.pack(fill='x')
-        self.suffix_edit.insert('1.0', self.suffix_var.get())
-        self.prefix_edit.bind('<KeyRelease>', self._on_prefix_edit)
-        self.suffix_edit.bind('<KeyRelease>', self._on_suffix_edit)
-        ttk.Label(sec, text=self.tr('prefix_hint'),
-                  foreground=theme['hint_fg']).pack(anchor='w', pady=(8, 0))
+        self._pf_boxes = {}
+        for kind, title_key in (('prefix', 'pf_prefix_list'),
+                                ('suffix', 'pf_suffix_list')):
+            head = ttk.Frame(pf_frame)
+            head.pack(fill='x', pady=(0 if kind == 'prefix' else 12, 4))
+            ttk.Label(head, text=self.tr(title_key)).pack(side='left')
+            ttk.Button(head, text=self.tr('pf_add'),
+                       command=lambda k=kind: self._add_pf_row(k)).pack(side='right')
+            box = ttk.Frame(pf_frame)
+            box.pack(fill='x')
+            self._pf_boxes[kind] = box
+            self._render_pf_rows(kind)
+        ttk.Label(sec, text=self.tr('pf_hint'), foreground=theme['hint_fg'],
+                  wraplength=520).pack(anchor='w', pady=(8, 0))
         return sec
+
+    def _render_pf_rows(self, kind):
+        """重建某一侧的前后缀列表行 (名称 / 内容 / 删除)。"""
+        box = self._pf_boxes.get(kind)
+        if box is None or not box.winfo_exists():
+            return
+        self._pf_locked = True
+        try:
+            for w in box.winfo_children():
+                w.destroy()
+            items = self._pf_items(kind)
+            theme = THEMES['dark' if self.dark else 'light']
+            if not items:
+                ttk.Label(box, text=self.tr('pf_empty'),
+                          foreground=theme['hint_fg']).pack(anchor='w')
+            else:
+                header = ttk.Frame(box)
+                header.pack(fill='x')
+                ttk.Label(header, text=self.tr('pf_name'), width=14,
+                          foreground=theme['hint_fg']).pack(side='left')
+                ttk.Label(header, text=self.tr('pf_content'),
+                          foreground=theme['hint_fg']).pack(side='left', padx=(6, 0))
+                for i, entry in enumerate(items):
+                    row = ttk.Frame(box)
+                    row.pack(fill='x', pady=2)
+                    var = tk.StringVar(value=entry.get('name', ''))
+                    ent = ttk.Entry(row, textvariable=var, width=14)
+                    ent.pack(side='left')
+                    var.trace_add('write', lambda *a, k=kind, i=i, v=var:
+                                  self._on_pf_name(k, i, v))
+                    txt = tk.Text(row, height=2, font=TEXT_FONT, wrap='word')
+                    txt.insert('1.0', entry.get('content', ''))
+                    self._apply_text_widget_theme(txt)
+                    txt.pack(side='left', fill='x', expand=True, padx=6)
+                    self._bind_pf_text(txt, kind, i)
+                    ttk.Button(row, text='×', width=2,
+                               command=lambda k=kind, i=i:
+                               self._remove_pf_row(k, i)).pack(side='left')
+            if self._settings_scroll is not None and self._settings_scroll.winfo_exists():
+                box.update_idletasks()
+                cv = self._settings_scroll.canvas
+                cv.configure(scrollregion=cv.bbox('all'))
+        finally:
+            self._pf_locked = False
+
+    def _bind_pf_text(self, txt, kind, i):
+        """内容框的变更同步: 键入/粘贴/剪切/失焦, 均空闲时读取一次。"""
+        def sync(event=None, k=kind, ix=i, t=txt):
+            if not t.winfo_exists():
+                return
+            self.root.after_idle(lambda: self._on_pf_content(k, ix, t))
+        for seq in ('<KeyRelease>', '<<Paste>>', '<<Cut>>', '<FocusOut>'):
+            txt.bind(seq, sync, add='+')
+
+    def _on_pf_name(self, kind, i, var):
+        if self._pf_locked:
+            return
+        items = self._pf_items(kind)
+        if not (0 <= i < len(items)):
+            return
+        items[i]['name'] = var.get()
+        self._refresh_pf_combos()
+        self._schedule_state_save()
+
+    def _on_pf_content(self, kind, i, txt):
+        if self._pf_locked:
+            return
+        items = self._pf_items(kind)
+        if not (0 <= i < len(items)):
+            return
+        try:
+            items[i]['content'] = txt.get('1.0', 'end-1c')
+        except tk.TclError:
+            return
+        self._refresh_pf_combos()
+        if self._pf_sel(kind) == i:
+            self.do_convert()          # 正在使用的前后缀: 立即生效
+        self._schedule_state_save()
+
+    def _add_pf_row(self, kind):
+        self._pf_items(kind).append({'name': '', 'content': ''})
+        self._render_pf_rows(kind)
+        self._refresh_pf_combos()
+        self._save_settings()
+
+    def _remove_pf_row(self, kind, i):
+        items = self._pf_items(kind)
+        if not (0 <= i < len(items)):
+            return
+        del items[i]
+        sel = self._pf_sel(kind)
+        if sel == i:
+            self._set_pf_sel(kind, -1)      # 删掉了正在使用的那条
+        elif sel > i:
+            self._set_pf_sel(kind, sel - 1)
+        self._render_pf_rows(kind)
+        self._refresh_pf_combos()
+        self._save_settings()
+        self.do_convert()
 
     def _build_section_appearance(self):
         theme = THEMES['dark' if self.dark else 'light']
@@ -2270,22 +2448,6 @@ class App:
                    command=lambda: self._reset_box_colors(key)).grid(
             row=4, column=0, columnspan=3, sticky='w', pady=(8, 0))
 
-    def _on_prefix_edit(self, event=None):
-        try:
-            self.prefix_var.set(self.prefix_edit.get('1.0', 'end-1c'))
-        except tk.TclError:
-            return
-        self._save_settings()
-        self.do_convert()
-
-    def _on_suffix_edit(self, event=None):
-        try:
-            self.suffix_var.set(self.suffix_edit.get('1.0', 'end-1c'))
-        except tk.TclError:
-            return
-        self._save_settings()
-        self.do_convert()
-
     def _on_setting_changed(self):
         self._save_settings()
         self.do_convert()
@@ -2317,8 +2479,9 @@ class App:
         self.btn_copy.configure(text=self.tr('btn_copy'))
         self.btn_clear.configure(text=self.tr('btn_clear'))
         self.btn_settings.configure(text=self.tr('btn_settings'))
-        self.prefix_label.configure(text=self.tr('include_prefix'))
-        self.suffix_label.configure(text=self.tr('include_suffix'))
+        self.prefix_label.configure(text=self.tr('label_prefix'))
+        self.suffix_label.configure(text=self.tr('label_suffix'))
+        self._refresh_pf_combos()
         self.theme_btn.configure(
             text=self.tr('theme_light' if self.dark else 'theme_dark'))
         # 左侧历史侧栏文本
@@ -2350,10 +2513,10 @@ class App:
         _save_config({
             'dark': self.dark,
             'lang': self.lang,
-            'prefix': self.prefix_var.get(),
-            'suffix': self.suffix_var.get(),
-            'include_prefix': self.include_prefix.get(),
-            'include_suffix': self.include_suffix.get(),
+            'prefixes': self.prefixes,
+            'suffixes': self.suffixes,
+            'prefix_sel': self.prefix_sel,
+            'suffix_sel': self.suffix_sel,
             'options': {k: self.enabled[k].get() for k in OPTION_ORDER},
             'fonts': fonts,
             # 历史记录 + 新记录(草稿)槽 + 当前槽位
@@ -2476,9 +2639,9 @@ class App:
         raw = self.input_text.get('1.0', 'end-1c')
         enabled = {k: v.get() for k, v in self.enabled.items()}
         result, counts, red, green, mapping = convert_text(raw, enabled)
-        # 前后缀: 仅在勾选时附加
-        prefix = self.prefix_var.get() if self.include_prefix.get() else ''
-        suffix = self.suffix_var.get() if self.include_suffix.get() else ''
+        # 前后缀: 按主界面下拉选择附加 (None 表示不附加)
+        prefix = self.selected_pf('prefix')
+        suffix = self.selected_pf('suffix')
         display = prefix + result + suffix
         self._map = mapping
         self._last_result = result
