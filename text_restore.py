@@ -1189,6 +1189,13 @@ class App:
             0 <= ssel < len(self.suffixes) else -1
         self._pf_boxes = {}       # 设置页中两侧列表的容器
         self._pf_locked = False   # 重建列表行时抑制回调
+        # 前后缀开关 (与下拉框并存: 下拉选内容, 开关决定是否附加)
+        self.include_prefix = tk.BooleanVar(value=bool(cfg.get('include_prefix', False)))
+        self.include_suffix = tk.BooleanVar(value=bool(cfg.get('include_suffix', False)))
+        # 窗口几何状态 (退出时保存, 启动时恢复)
+        self._win_geom = None
+        self._win_state = 'normal'
+        self._apply_saved_geometry(cfg)
         opts = cfg.get('options', {})
         self.enabled = {k: tk.BooleanVar(value=bool(opts.get(k, True)))
                         for k in OPTION_ORDER}
@@ -1231,8 +1238,63 @@ class App:
                 self._current_slot = m + 1 if m >= 0 else None
         # 关闭窗口时保存输入状态
         root.protocol('WM_DELETE_WINDOW', self._on_close)
+        # 记录窗口尺寸/位置变化 (仅顶层窗口自身的事件)
+        root.bind('<Configure>', self._on_window_configure, add='+')
         self.input_text.focus_set()
         self.do_convert()
+        self.restore_window_state()   # 上次是最大化则恢复最大化
+
+    # ---------- 窗口几何记忆 ----------
+    def _apply_saved_geometry(self, cfg):
+        """恢复上次的窗口尺寸与位置 (校验最小值与屏幕可见性)。"""
+        geo = cfg.get('win_geometry')
+        if not isinstance(geo, str):
+            return False
+        m = re.match(r'^(\d+)x(\d+)([+-]\d+)([+-]\d+)$', geo.strip())
+        if not m:
+            return False
+        w, h = int(m.group(1)), int(m.group(2))
+        if w < 860 or h < 400:          # 小于最小尺寸则用默认
+            return False
+        sw = self.root.winfo_screenwidth()
+        sh = self.root.winfo_screenheight()
+        w, h = min(w, sw), min(h, sh)
+        x, y = int(m.group(3)), int(m.group(4))
+        # 允许副屏负坐标, 但保证至少有 120x80 留在屏幕内
+        x = max(-(w - 120), min(x, sw - 120))
+        y = max(0, min(y, sh - 80))
+        self.root.geometry(f'{w}x{h}+{x}+{y}')
+        self._win_geom = f'{w}x{h}+{x}+{y}'
+        st = cfg.get('win_state')
+        if st in ('normal', 'zoomed'):
+            self._win_state = st
+        return True
+
+    def restore_window_state(self):
+        """窗口显示后应用"最大化"状态。"""
+        if self._win_state == 'zoomed':
+            try:
+                self.root.state('zoomed')
+            except tk.TclError:
+                pass
+
+    def _on_window_configure(self, event):
+        """记录窗口尺寸/位置 (忽略子控件事件与最小化状态)。"""
+        if event.widget is not self.root:
+            return
+        if event.width < 200 or event.height < 150:
+            return          # 未映射/最小化时的异常尺寸
+        try:
+            st = self.root.state()
+        except tk.TclError:
+            return
+        if st == 'zoomed':
+            self._win_state = 'zoomed'
+            return
+        if st != 'normal':
+            return
+        self._win_state = 'normal'
+        self._win_geom = f'{event.width}x{event.height}+{event.x}+{event.y}'
 
     def _apply_window_icon(self):
         """让窗口标题栏使用应用图标。
@@ -1341,21 +1403,30 @@ class App:
                                       foreground='#1a6fb0')
         self.status_label.grid(row=6, column=0, sticky='w', pady=(10, 0))
 
-        # ---- 前后缀选择 (具名列表, None 表示不附加) ----
+        # ---- 前后缀: 开关 (是否附加) + 下拉框 (附加哪一条) ----
         pf_row = ttk.Frame(content)
         pf_row.grid(row=7, column=0, sticky='ew', pady=(8, 0))
         self.prefix_label = ttk.Label(pf_row, text=self.tr('label_prefix'))
         self.prefix_label.pack(side='left')
-        self.prefix_combo = ttk.Combobox(pf_row, state='readonly', width=18)
-        self.prefix_combo.pack(side='left', padx=(4, 0))
+        sw1 = Switch(pf_row, variable=self.include_prefix,
+                     command=self._on_setting_changed, dark=self.dark,
+                     bg=THEMES['dark' if self.dark else 'light']['root_bg'])
+        sw1.pack(side='left', padx=(4, 6))
+        self.prefix_combo = ttk.Combobox(pf_row, state='readonly', width=16)
+        self.prefix_combo.pack(side='left')
         self.prefix_combo.bind('<<ComboboxSelected>>',
                                lambda e: self._on_pf_selected('prefix'))
         self.suffix_label = ttk.Label(pf_row, text=self.tr('label_suffix'))
         self.suffix_label.pack(side='left', padx=(16, 0))
-        self.suffix_combo = ttk.Combobox(pf_row, state='readonly', width=18)
-        self.suffix_combo.pack(side='left', padx=(4, 0))
+        sw2 = Switch(pf_row, variable=self.include_suffix,
+                     command=self._on_setting_changed, dark=self.dark,
+                     bg=THEMES['dark' if self.dark else 'light']['root_bg'])
+        sw2.pack(side='left', padx=(4, 6))
+        self.suffix_combo = ttk.Combobox(pf_row, state='readonly', width=16)
+        self.suffix_combo.pack(side='left')
         self.suffix_combo.bind('<<ComboboxSelected>>',
                                lambda e: self._on_pf_selected('suffix'))
+        self._switches.extend([sw1, sw2])
         self._refresh_pf_combos()
 
         # ---- 底部: 复制/清空/设置 + 主题 ----
@@ -2252,6 +2323,11 @@ class App:
         if idx == self._pf_sel(kind):
             return
         self._set_pf_sel(kind, idx)
+        if idx >= 0:
+            # 选到具体条目时自动打开对应开关 (开关仍可手动关闭)
+            var = self.include_prefix if kind == 'prefix' else self.include_suffix
+            if not var.get():
+                var.set(True)
         self._save_settings()
         self.do_convert()
 
@@ -2517,6 +2593,11 @@ class App:
             'suffixes': self.suffixes,
             'prefix_sel': self.prefix_sel,
             'suffix_sel': self.suffix_sel,
+            'include_prefix': self.include_prefix.get(),
+            'include_suffix': self.include_suffix.get(),
+            # 窗口几何 (尺寸/位置/最大化状态)
+            'win_geometry': self._win_geom or self.root.geometry(),
+            'win_state': self._win_state,
             'options': {k: self.enabled[k].get() for k in OPTION_ORDER},
             'fonts': fonts,
             # 历史记录 + 新记录(草稿)槽 + 当前槽位
@@ -2639,9 +2720,9 @@ class App:
         raw = self.input_text.get('1.0', 'end-1c')
         enabled = {k: v.get() for k, v in self.enabled.items()}
         result, counts, red, green, mapping = convert_text(raw, enabled)
-        # 前后缀: 按主界面下拉选择附加 (None 表示不附加)
-        prefix = self.selected_pf('prefix')
-        suffix = self.selected_pf('suffix')
+        # 前后缀: 开关关闭则不附加, None 表示无内容
+        prefix = self.selected_pf('prefix') if self.include_prefix.get() else ''
+        suffix = self.selected_pf('suffix') if self.include_suffix.get() else ''
         display = prefix + result + suffix
         self._map = mapping
         self._last_result = result
