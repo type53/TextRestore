@@ -78,7 +78,10 @@ STRINGS = {
         'status_none': '未发现需要还原的字符。',
         'status_copied': '已复制到剪贴板 ✓',
         'status_empty': '输出为空, 没有可复制的内容。',
+        'status_pasted': '已粘贴到输入框。',
+        'status_clip_empty': '剪贴板中没有文本。',
         'btn_copy': '复制结果',
+        'btn_paste': '粘贴',
         'btn_clear': '清空输入',
         'btn_settings': '设置',
         'btn_done': '完成',
@@ -117,20 +120,19 @@ STRINGS = {
         'lang_label': '语言:',
         'hist_title': '历史记录',
         'btn_hist_save': '＋ 存入历史',
-        'btn_hist_del': '删除',
-        'btn_hist_clear': '清空',
+        'btn_hist_clear': '清除选中',
         'hist_saved': '已存入历史记录 ✓',
         'hist_empty_input': '输入为空, 无法存入历史。',
         'hist_deleted': '已删除选中记录。',
-        'hist_none_selected': '请先选择一条历史记录。',
-        'hist_clear_confirm': '确定清空全部历史记录? 此操作不可撤销。',
+        'hist_clear_confirm': '确定删除选中的 {n} 条记录? 此操作不可撤销。',
+        'hist_checked_none': '请先勾选要删除的记录。',
+        'hist_cleared': '已删除选中的 {n} 条记录。',
         'hist_delete_confirm': '确定删除选中的历史记录? 此操作不可撤销。',
         'confirm_title': '请确认',
         'hist_ok': '确定',
         'hist_cancel': '取消',
         'hist_new': '新记录',
         'hist_loaded_new': '已切换到新记录',
-        'hist_rename': '重命名',
         'hist_rename_title': '重命名历史记录',
         'hist_rename_msg': '输入新的名称 (留空则恢复为内容预览):',
         'hist_renamed': '已重命名 ✓',
@@ -145,7 +147,6 @@ STRINGS = {
         'hist_loaded': '已载入历史记录 {ts}',
         'hist_loaded_plain': '已载入历史记录',
         'hist_blank': '(空)',
-        'hist_empty': '暂无历史记录。',
         'opt_fullwidth': '全角转半角',
         'opt_punct': '中文标点',
         'opt_math': '花体字体',
@@ -181,7 +182,10 @@ STRINGS = {
         'status_none': 'No hidden characters found.',
         'status_copied': 'Copied to clipboard ✓',
         'status_empty': 'Output is empty, nothing to copy.',
+        'status_pasted': 'Pasted into the input box.',
+        'status_clip_empty': 'No text in the clipboard.',
         'btn_copy': 'Copy',
+        'btn_paste': 'Paste',
         'btn_clear': 'Clear',
         'btn_settings': 'Settings',
         'btn_done': 'Done',
@@ -222,20 +226,19 @@ STRINGS = {
         'lang_label': 'Language:',
         'hist_title': 'History',
         'btn_hist_save': '＋ Save',
-        'btn_hist_del': 'Delete',
-        'btn_hist_clear': 'Clear all',
+        'btn_hist_clear': 'Clear selected',
         'hist_saved': 'Saved to history ✓',
         'hist_empty_input': 'Input is empty, nothing to save.',
         'hist_deleted': 'Entry deleted.',
-        'hist_none_selected': 'Select a history entry first.',
-        'hist_clear_confirm': 'Clear all history? This cannot be undone.',
+        'hist_clear_confirm': 'Delete the {n} selected entries? This cannot be undone.',
+        'hist_checked_none': 'Tick the entries you want to delete first.',
+        'hist_cleared': 'Deleted {n} entries.',
         'hist_delete_confirm': 'Delete the selected history entry? This cannot be undone.',
         'confirm_title': 'Please confirm',
         'hist_ok': 'OK',
         'hist_cancel': 'Cancel',
         'hist_new': 'New record',
         'hist_loaded_new': 'Switched to New record',
-        'hist_rename': 'Rename',
         'hist_rename_title': 'Rename history entry',
         'hist_rename_msg': 'Enter a new name (leave empty to use the content preview):',
         'hist_renamed': 'Renamed ✓',
@@ -250,7 +253,6 @@ STRINGS = {
         'hist_loaded': 'Loaded history entry {ts}',
         'hist_loaded_plain': 'Loaded history entry',
         'hist_blank': '(empty)',
-        'hist_empty': 'No history yet.',
         'opt_fullwidth': 'Fullwidth',
         'opt_punct': 'Chinese punct.',
         'opt_math': 'Math fonts',
@@ -1036,6 +1038,64 @@ class Switch(tk.Canvas):
         tick()
 
 
+class HistCheck(tk.Canvas):
+    """历史列表项左侧的小勾选框 (Canvas 绘制, 跟随主题)。
+
+    visible=False 且未勾选时不绘制任何内容 (悬停时才显示)。
+    """
+
+    def __init__(self, master, checked=False, dark=False, bg='#f5f5f7',
+                 size=14, command=None):
+        super().__init__(master, width=size, height=size, highlightthickness=0,
+                         bd=0, bg=bg)
+        self._size = size
+        self._checked = bool(checked)
+        self._dark = dark
+        self._visible = False
+        self._bg = bg
+        self._command = command
+        self.bind('<Button-1>', self._on_click)
+        self._draw()
+
+    def set_state(self, checked=None, dark=None, bg=None, visible=None):
+        if checked is not None:
+            self._checked = bool(checked)
+        if dark is not None:
+            self._dark = dark
+        if visible is not None:
+            self._visible = bool(visible)
+        if bg is not None:
+            self._bg = bg
+            self.configure(bg=bg)
+        self._draw()
+
+    def _on_click(self, event=None):
+        if self._command:
+            self._command()
+        return 'break'
+
+    def _draw(self):
+        self.delete('all')
+        if not self._visible and not self._checked:
+            return                      # 未悬停且未勾选: 完全隐藏
+        s = self._size
+        pad = 1
+        side = s - 2 * pad
+        accent = '#3b82f6' if self._dark else '#2f6fe0'
+        if self._checked:
+            self.create_rectangle(pad, pad, pad + side, pad + side,
+                                  fill=accent, outline=accent, width=1)
+            self.create_line(pad + side * 0.24, pad + side * 0.52,
+                             pad + side * 0.44, pad + side * 0.72,
+                             pad + side * 0.78, pad + side * 0.30,
+                             fill='#ffffff', width=1.6,
+                             capstyle='round', joinstyle='round')
+        else:
+            self.create_rectangle(pad, pad, pad + side, pad + side,
+                                  fill='', width=1,
+                                  outline='#9a9a9a' if self._dark else '#8a8a8a')
+
+
 class ColorButton(tk.Frame):
     """颜色选择按钮: 色块 + 文字说明, 点击弹出系统取色器。
 
@@ -1163,6 +1223,8 @@ class App:
         self._nav_current = -1
         self._save_after = None   # 输入状态防抖保存计时器
         self._hist_guard = False     # 列表事件期间防止重入
+        self._hist_checked = set()   # 勾选待删除的历史记录下标
+        self._clear_btn_on = False
         cfg = _load_config()
         # 历史记录 (兼容纯字符串与 {text, ts} 两种格式)
         self.history = []
@@ -1429,12 +1491,15 @@ class App:
         self._switches.extend([sw1, sw2])
         self._refresh_pf_combos()
 
-        # ---- 底部: 复制/清空/设置 + 主题 ----
+        # ---- 底部: 复制/粘贴/清空/设置 + 主题 ----
         bottom = ttk.Frame(content)
         bottom.grid(row=8, column=0, sticky='ew', pady=(6, 0))
         self.btn_copy = ttk.Button(bottom, text=self.tr('btn_copy'),
                                    command=self.copy_result)
         self.btn_copy.pack(side='left')
+        self.btn_paste = ttk.Button(bottom, text=self.tr('btn_paste'),
+                                    command=self.paste_input)
+        self.btn_paste.pack(side='left', padx=(6, 0))
         self.btn_clear = ttk.Button(bottom, text=self.tr('btn_clear'),
                                     command=self.clear_input)
         self.btn_clear.pack(side='left', padx=8)
@@ -1488,30 +1553,200 @@ class App:
 
         list_wrap = ttk.Frame(sb, style='Sidebar.TFrame')
         list_wrap.pack(fill='both', expand=True, pady=(8, 0))
-        self.hist_list = tk.Listbox(list_wrap, activestyle='none',
-                                    exportselection=False, relief='flat',
-                                    bd=0, highlightthickness=0,
-                                    font=UI_FONT, width=16)
+        self.hist_canvas = tk.Canvas(list_wrap, highlightthickness=0, bd=0,
+                                     width=16)
         self.hist_scroll = ttk.Scrollbar(list_wrap, orient='vertical',
-                                         command=self.hist_list.yview)
-        self.hist_list.configure(yscrollcommand=self._hist_scroll_sync)
-        self.hist_list.pack(side='left', fill='both', expand=True)
+                                         command=self.hist_canvas.yview)
+        self.hist_canvas.configure(yscrollcommand=self._hist_scroll_sync)
+        self.hist_canvas.pack(side='left', fill='both', expand=True)
         self._hist_sb_shown = False   # 滚动条仅在内容超出时显示
-        self.hist_list.bind('<<ListboxSelect>>', self._on_history_select)
+        self.hist_inner = tk.Frame(self.hist_canvas)
+        self._hist_win = self.hist_canvas.create_window(
+            (0, 0), window=self.hist_inner, anchor='nw')
+        self.hist_inner.bind('<Configure>', self._on_hist_inner_configure)
+        self.hist_canvas.bind('<Configure>', self._on_hist_canvas_configure)
+        self._hist_rows = []          # 每行的控件引用 (悬停/样式用)
+        self._hover_slot = None
 
-        hist_btns = ttk.Frame(sb, style='Sidebar.TFrame')
-        hist_btns.pack(fill='x', pady=(8, 0))
-        self.btn_hist_rename = ttk.Button(hist_btns, text=self.tr('hist_rename'),
-                                          command=self.rename_history)
-        self.btn_hist_rename.pack(fill='x')
-        row2 = ttk.Frame(hist_btns, style='Sidebar.TFrame')
-        row2.pack(fill='x', pady=(6, 0))
-        self.btn_hist_del = ttk.Button(row2, text=self.tr('btn_hist_del'),
-                                       command=self.delete_history)
-        self.btn_hist_del.pack(side='left', expand=True, fill='x')
-        self.btn_hist_clear = ttk.Button(row2, text=self.tr('btn_hist_clear'),
-                                         command=self.clear_history)
-        self.btn_hist_clear.pack(side='left', expand=True, fill='x', padx=(6, 0))
+        # 清除选中: 勾选了列表项后点亮可用
+        self.btn_hist_clear = ttk.Button(sb, text=self.tr('btn_hist_clear'),
+                                         command=self.clear_selected_history,
+                                         state='disabled')
+        self.btn_hist_clear.pack(fill='x', pady=(8, 0))
+        self._clear_btn_on = False
+
+    # ---------- 历史列表 (自绘行: 勾选框 + 预览 + 悬停操作) ----------
+    def _on_hist_inner_configure(self, event=None):
+        self.hist_canvas.configure(scrollregion=self.hist_canvas.bbox('all'))
+
+    def _on_hist_canvas_configure(self, event):
+        self.hist_canvas.itemconfigure(self._hist_win, width=event.width)
+
+    def _on_hist_wheel(self, event):
+        delta = getattr(event, 'delta', 0)
+        if delta:
+            steps = -1 if delta > 0 else 1
+            if abs(delta) >= 120:
+                steps = -int(delta) // 120
+        else:
+            steps = 1 if event.num == 4 else -1
+        self.hist_canvas.yview_scroll(steps, 'units')
+        return 'break'
+
+    def _bind_hist_scroll(self, w):
+        w.bind('<MouseWheel>', self._on_hist_wheel)
+        w.bind('<Button-4>', self._on_hist_wheel)
+        w.bind('<Button-5>', self._on_hist_wheel)
+
+    def _row_colors(self):
+        if self.dark:
+            return {'active': '#254a75', 'hover': '#242424',
+                    'base': '#171717', 'glyph': '#b0b0b0'}
+        return {'active': '#dce8ff', 'hover': '#e9e9ec',
+                'base': '#f5f5f7', 'glyph': '#6b6b6b'}
+
+    def _row_bg(self, active, hover):
+        c = self._row_colors()
+        if active:
+            return c['active']
+        return c['hover'] if hover else c['base']
+
+    def _make_hist_row(self, slot, text, is_new=False):
+        c = self._row_colors()
+        theme = THEMES['dark' if self.dark else 'light']
+        active = (slot == self._current_slot)
+        bg = self._row_bg(active, slot == self._hover_slot)
+        row = tk.Frame(self.hist_inner, bg=bg)
+        row.pack(fill='x')
+        chk = None
+        if is_new:
+            spacer = tk.Frame(row, width=18, height=1, bg=bg)
+            spacer.pack(side='left', padx=(2, 0))
+        else:
+            idx = slot - 1
+            chk = HistCheck(row, checked=(idx in self._hist_checked),
+                            dark=self.dark, bg=bg,
+                            command=lambda i=idx: self._toggle_check(i))
+            chk.pack(side='left', padx=(2, 2))
+            self._bind_hist_scroll(chk)
+        lbl = tk.Label(row, text=text, bg=bg, anchor='w', justify='left',
+                       font=UI_FONT,
+                       fg=('#4a9eff' if self.dark else '#1a6fb0') if is_new
+                       else theme['text_fg'])
+        lbl.pack(side='left', fill='x', expand=True, padx=(2, 2), pady=3)
+        btn_del = btn_ren = None
+        if not is_new:
+            btn_del = tk.Label(row, text='×', bg=bg, fg=bg, width=2,
+                               font=UI_FONT, cursor='hand2',
+                               activebackground=bg, activeforeground=c['glyph'])
+            btn_del.pack(side='right')
+            btn_ren = tk.Label(row, text='✎', bg=bg, fg=bg, width=2,
+                               font=UI_FONT, cursor='hand2',
+                               activebackground=bg, activeforeground=c['glyph'])
+            btn_ren.pack(side='right')
+            btn_del.bind('<Button-1>', lambda e, i=slot - 1: self.delete_history(i))
+            btn_ren.bind('<Button-1>', lambda e, i=slot - 1: self.rename_history(i))
+            for w in (btn_del, btn_ren):
+                self._bind_hist_scroll(w)
+        for w in (row, lbl):
+            w.bind('<Button-1>', lambda e, s=slot: self._on_row_click(s))
+            w.bind('<Enter>', lambda e, s=slot: self._on_row_hover(s))
+            w.bind('<Leave>', lambda e, s=slot: self._on_row_leave(s))
+            self._bind_hist_scroll(w)
+        for w in (row, lbl, chk, btn_ren, btn_del):
+            if w is not None:
+                w._hist_slot = slot
+        self._hist_rows.append({
+            'slot': slot, 'idx': (slot - 1) if not is_new else None,
+            'is_new': is_new, 'frame': row, 'lbl': lbl, 'ren': btn_ren,
+            'del': btn_del, 'chk': chk, 'bg': bg, 'show': None,
+        })
+
+    def _refresh_history_list(self):
+        """重建左侧历史列表 (勾选框 + 预览, 悬停显示改名/删除)。"""
+        inner = getattr(self, 'hist_inner', None)
+        if inner is None or not inner.winfo_exists():
+            return
+        for w in inner.winfo_children():
+            w.destroy()
+        self._hist_rows = []
+        # 丢弃已失效的勾选下标
+        self._hist_checked = {i for i in self._hist_checked
+                              if 0 <= i < len(self.history)}
+        self._make_hist_row(0, self._history_label(0), is_new=True)
+        for i in range(len(self.history)):
+            self._make_hist_row(i + 1, self._history_label(i + 1))
+        inner.update_idletasks()
+        self.hist_canvas.configure(scrollregion=self.hist_canvas.bbox('all'))
+        self._apply_row_styles()
+        self._update_clear_btn()
+
+    def _on_row_hover(self, slot):
+        if self._hover_slot != slot:
+            self._hover_slot = slot
+            self._apply_row_styles()
+
+    def _on_row_leave(self, slot):
+        self.hist_inner.after_idle(self._hover_recheck)
+
+    def _hover_recheck(self):
+        """指针离开后延迟确认是否仍在某一行内 (避免子控件间闪烁)。"""
+        try:
+            x, y = self.hist_inner.winfo_pointerxy()
+            w = self.hist_inner.winfo_containing(x, y)
+        except tk.TclError:
+            return
+        slot = None
+        while w is not None:
+            slot = getattr(w, '_hist_slot', None)
+            if slot is not None:
+                break
+            w = getattr(w, 'master', None)
+        if slot != self._hover_slot:
+            self._hover_slot = slot
+            self._apply_row_styles()
+
+    def _apply_row_styles(self):
+        c = self._row_colors()
+        for r in self._hist_rows:
+            active = (r['slot'] == self._current_slot)
+            hover = (r['slot'] == self._hover_slot)
+            bg = self._row_bg(active, hover)
+            show = hover          # 行内操作按钮/勾选框仅在悬停时出现
+            checked = (r['idx'] is not None and r['idx'] in self._hist_checked)
+            if bg == r['bg'] and show == r['show'] and checked == r.get('checked'):
+                continue
+            r['bg'], r['show'], r['checked'] = bg, show, checked
+            r['frame'].configure(bg=bg)
+            r['lbl'].configure(bg=bg)
+            for key in ('ren', 'del'):
+                w = r[key]
+                if w is not None:
+                    w.configure(bg=bg, fg=(c['glyph'] if show else bg),
+                                activebackground=bg)
+            if r['chk'] is not None:
+                r['chk'].set_state(checked=checked, dark=self.dark, bg=bg,
+                                   visible=show)
+
+    def _toggle_check(self, idx):
+        if idx in self._hist_checked:
+            self._hist_checked.discard(idx)
+        else:
+            self._hist_checked.add(idx)
+        self._apply_row_styles()
+        self._update_clear_btn()
+
+    def _update_clear_btn(self):
+        on = bool(self._hist_checked)
+        if on == self._clear_btn_on:
+            return
+        self._clear_btn_on = on
+        try:
+            self.btn_hist_clear.configure(
+                state='normal' if on else 'disabled',
+                style='Accent.TButton' if on else 'TButton')
+        except tk.TclError:
+            pass
 
     def _hist_scroll_sync(self, first, last):
         """历史列表滚动条: 仅在内容超出可视范围时显示。"""
@@ -1522,7 +1757,7 @@ class App:
         need = not (first <= 0.0 and last >= 1.0)
         if need and not self._hist_sb_shown:
             self.hist_scroll.pack(side='right', fill='y',
-                                  before=self.hist_list)   # 保持在列表之前, 优先分配宽度
+                                  before=self.hist_canvas)  # 优先分配宽度
             self._hist_sb_shown = True
         elif not need and self._hist_sb_shown:
             self.hist_scroll.pack_forget()
@@ -1552,27 +1787,17 @@ class App:
         name = (entry.get('name') or '').strip()
         return name or self._history_preview(entry)
 
-    def _refresh_history_list(self):
-        if self.hist_list is None or not self.hist_list.winfo_exists():
-            return
-        self.hist_list.delete(0, 'end')
-        self.hist_list.insert('end', self._history_label(0))
-        for i in range(len(self.history)):
-            self.hist_list.insert('end', self._history_label(i + 1))
-        # 新记录行用强调色区分
-        try:
-            self.hist_list.itemconfig(
-                0, foreground='#4a9eff' if self.dark else '#1a6fb0')
-        except tk.TclError:
-            pass
-        slot = self._current_slot
-        if slot is not None and 0 <= slot < self.hist_list.size():
-            self.hist_list.selection_clear(0, 'end')
-            self.hist_list.selection_set(slot)
-            self.hist_list.see(slot)
-
     def _sync_draft(self):
-        """当前内容属于草稿槽(新记录)时, 同步到 self.draft。"""
+        """仅在"新记录"槽时把输入同步为草稿。
+
+        注意: 不能把 `_current_slot is None` 也当作草稿槽 — 否则删除记录
+        (槽位被置空) 或查看其他内容时会覆盖掉用户正在写的草稿。
+        """
+        if self._current_slot == 0:
+            self.draft = self.input_text.get('1.0', 'end-1c')
+
+    def _stash_current(self):
+        """切换槽位前: 草稿槽或未归属内容才存入草稿 (历史条目是副本, 不动草稿)。"""
         if self._current_slot in (0, None):
             self.draft = self.input_text.get('1.0', 'end-1c')
 
@@ -1651,6 +1876,8 @@ class App:
                                 'name': ''})
         del self.history[MAX_HISTORY:]
         self._current_slot = 1 if select else None
+        # 新条目插到最前, 已有勾选下标整体后移一位
+        self._hist_checked = {i + 1 for i in self._hist_checked}
         self._refresh_history_list()
         self._save_settings()
         self._update_edit_state()
@@ -1666,24 +1893,16 @@ class App:
         self._add_history(text, select=True)
         self._flash(self.tr('hist_saved'))
 
-    def _on_history_select(self, event=None):
-        """点击列表项: 静默切换槽位 (新记录 / 历史记录), 不做任何覆盖询问。
-
-        切走前若当前在"新记录"槽, 内容已存入 self.draft, 因此不会丢失。
-        """
+    def _on_row_click(self, slot):
+        """点击列表行: 静默切换槽位 (新记录 / 历史记录), 不做覆盖询问。"""
         if self._hist_guard:
             return
-        sel = self.hist_list.curselection()
-        if not sel:
-            return
-        slot = sel[0]
         if slot > len(self.history) or slot == self._current_slot:
             return
         if not self._confirm_pending_edit():
-            # 用户取消: 恢复原选中项
-            self._refresh_history_list()
+            self._refresh_history_list()      # 取消: 恢复原样式
             return
-        self._sync_draft()
+        self._stash_current()
         if slot == 0:
             self._load_into_input(self.draft)
             msg = self.tr('hist_loaded_new')
@@ -1698,13 +1917,11 @@ class App:
         self._update_edit_state()
         self._flash(msg)
 
-    def rename_history(self):
-        """重命名选中的历史记录 (新记录槽不可重命名)。"""
-        sel = self.hist_list.curselection()
-        if not sel or sel[0] == 0 or sel[0] - 1 >= len(self.history):
-            self._flash(self.tr('hist_none_selected'))
+    def rename_history(self, idx):
+        """重命名第 idx 条历史记录 (行内 ✎ 按钮)。"""
+        if not (0 <= idx < len(self.history)):
             return
-        entry = self.history[sel[0] - 1]
+        entry = self.history[idx]
         initial = (entry.get('name') or '').strip() or self._history_preview(entry)
         new = self._ask_text(self.tr('hist_rename_title'),
                              self.tr('hist_rename_msg'), initial)
@@ -1725,31 +1942,52 @@ class App:
         self._update_edit_state()
         self.input_text.focus_set()
 
-    def delete_history(self):
-        sel = self.hist_list.curselection()
-        if not sel or sel[0] == 0 or sel[0] - 1 >= len(self.history):
-            self._flash(self.tr('hist_none_selected'))
+    # ---------- 删除 ----------
+    def _delete_indices(self, idxs):
+        """删除若干条历史记录 (下标基于 self.history), 并修正当前槽位。
+
+        只调整槽位编号, 不动 self.draft — 用户的草稿必须原样保留。
+        """
+        idxs = sorted({i for i in idxs if 0 <= i < len(self.history)},
+                      reverse=True)
+        if not idxs:
+            return 0
+        cur = self._current_slot
+        for i in idxs:
+            del self.history[i]
+            if cur is None:
+                continue
+            if cur == i + 1:          # 删掉的正是当前激活项 -> 失去归属
+                cur = None
+            elif cur > i + 1:
+                cur -= 1
+        self._current_slot = cur
+        self._hist_checked = set()
+        self._hover_slot = None
+        self._refresh_history_list()
+        self._save_settings()
+        self._update_edit_state()
+        return len(idxs)
+
+    def delete_history(self, idx):
+        """删除第 idx 条历史记录 (行内 × 按钮, 需确认)。"""
+        if not (0 <= idx < len(self.history)):
             return
         if self._ask_confirm(self.tr('hist_delete_confirm')) != 'ok':
             return
-        del self.history[sel[0] - 1]
-        self._current_slot = None
-        self._refresh_history_list()
-        self._save_settings()
-        self._update_edit_state()
+        self._delete_indices([idx])
         self._flash(self.tr('hist_deleted'))
 
-    def clear_history(self):
-        if not self.history:
-            self._flash(self.tr('hist_empty'))
+    def clear_selected_history(self):
+        """删除所有被勾选的历史记录 (需确认)。"""
+        if not self._hist_checked:
+            self._flash(self.tr('hist_checked_none'))
             return
-        if self._ask_confirm(self.tr('hist_clear_confirm')) != 'ok':
+        n = len(self._hist_checked)
+        if self._ask_confirm(self.tr('hist_clear_confirm', n=n)) != 'ok':
             return
-        self.history = []
-        self._current_slot = None
-        self._refresh_history_list()
-        self._save_settings()
-        self._update_edit_state()
+        removed = self._delete_indices(list(self._hist_checked))
+        self._flash(self.tr('hist_cleared', n=removed))
 
     # ---------- 对话框 ----------
     def _ask_confirm(self, msg):
@@ -1852,12 +2090,13 @@ class App:
                             foreground=theme['text_fg'])
         except tk.TclError:
             pass
-        if getattr(self, 'hist_list', None) is not None and self.hist_list.winfo_exists():
-            self.hist_list.configure(
-                bg=sb_bg, fg=theme['text_fg'],
-                selectbackground='#264f78' if self.dark else '#c9e2ff',
-                selectforeground='#ffffff' if self.dark else '#000000',
-                highlightbackground=sb_bg)
+        if getattr(self, 'hist_canvas', None) is not None and \
+                self.hist_canvas.winfo_exists():
+            self.hist_canvas.configure(bg=sb_bg, highlightbackground=sb_bg)
+            self.hist_inner.configure(bg=sb_bg)
+            # 行内颜色随主题重建
+            if hasattr(self, '_hist_rows'):
+                self._refresh_history_list()
 
     # ---------- 同步滚动 ----------
     def _scroll_both(self, *args):
@@ -2553,6 +2792,7 @@ class App:
         self.input_label.configure(text=self.tr('input_label'))
         self.output_label.configure(text=self.tr('output_label'))
         self.btn_copy.configure(text=self.tr('btn_copy'))
+        self.btn_paste.configure(text=self.tr('btn_paste'))
         self.btn_clear.configure(text=self.tr('btn_clear'))
         self.btn_settings.configure(text=self.tr('btn_settings'))
         self.prefix_label.configure(text=self.tr('label_prefix'))
@@ -2564,8 +2804,6 @@ class App:
         self.hist_title.configure(text=self.tr('hist_title'))
         self.btn_hist_save.configure(text=self.tr('btn_hist_save'))
         self.btn_hist_save_edit.configure(text=self.tr('hist_save_edit'))
-        self.btn_hist_rename.configure(text=self.tr('hist_rename'))
-        self.btn_hist_del.configure(text=self.tr('btn_hist_del'))
         self.btn_hist_clear.configure(text=self.tr('btn_hist_clear'))
         self._refresh_history_list()
 
@@ -2792,6 +3030,28 @@ class App:
         self.root.clipboard_clear()
         self.root.clipboard_append(content)
         self._flash(self.tr('status_copied'))
+
+    def paste_input(self):
+        """把剪贴板文本粘贴到输入框: 空则直接填入, 否则另起一行追加。"""
+        try:
+            text = self.root.clipboard_get()
+        except tk.TclError:
+            self._flash(self.tr('status_clip_empty'))
+            return
+        if text is None or text == '':
+            self._flash(self.tr('status_clip_empty'))
+            return
+        cur = self.input_text.get('1.0', 'end-1c')
+        if cur.strip() == '':
+            self.input_text.delete('1.0', 'end')
+            self.input_text.insert('1.0', text)
+        else:
+            self.input_text.insert('end-1c', '\n' + text)
+        self.input_text.mark_set('insert', 'end-1c')
+        self.input_text.see('end-1c')
+        self.do_convert()
+        self.input_text.focus_set()
+        self._flash(self.tr('status_pasted'))
 
     def clear_input(self):
         self.input_text.delete('1.0', 'end')
