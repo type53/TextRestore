@@ -1618,22 +1618,8 @@ class App:
         bg = self._row_bg(active, slot == self._hover_slot)
         row = tk.Frame(self.hist_inner, bg=bg)
         row.pack(fill='x')
-        chk = None
-        if is_new:
-            spacer = tk.Frame(row, width=18, height=1, bg=bg)
-            spacer.pack(side='left', padx=(2, 0))
-        else:
-            idx = slot - 1
-            chk = HistCheck(row, checked=(idx in self._hist_checked),
-                            dark=self.dark, bg=bg,
-                            command=lambda i=idx: self._toggle_check(i))
-            chk.pack(side='left', padx=(2, 2))
-            self._bind_hist_scroll(chk)
-        lbl = tk.Label(row, text=text, bg=bg, anchor='w', justify='left',
-                       font=UI_FONT,
-                       fg=('#4a9eff' if self.dark else '#1a6fb0') if is_new
-                       else theme['text_fg'])
-        lbl.pack(side='left', fill='x', expand=True, padx=(2, 2), pady=3)
+        # 注意: pack 按调用顺序分配空间。右侧按钮/左侧勾选框必须先 pack,
+        # 否则超长文本会把标签的请求宽度撑满整行, 按钮被挤出行外无法点击。
         btn_del = btn_ren = None
         if not is_new:
             btn_del = tk.Label(row, text='×', bg=bg, fg=bg, width=2,
@@ -1648,6 +1634,23 @@ class App:
             btn_ren.bind('<Button-1>', lambda e, i=slot - 1: self.rename_history(i))
             for w in (btn_del, btn_ren):
                 self._bind_hist_scroll(w)
+        chk = None
+        if is_new:
+            spacer = tk.Frame(row, width=18, height=1, bg=bg)
+            spacer.pack(side='left', padx=(2, 0))
+        else:
+            idx = slot - 1
+            chk = HistCheck(row, checked=(idx in self._hist_checked),
+                            dark=self.dark, bg=bg,
+                            command=lambda i=idx: self._toggle_check(i))
+            chk.pack(side='left', padx=(2, 2))
+            self._bind_hist_scroll(chk)
+        # 标签最后 pack: 只吃剩余空间, 文本过长时被裁剪而不会挤出按钮
+        lbl = tk.Label(row, text=text, bg=bg, anchor='w', justify='left',
+                       width=1, font=UI_FONT,
+                       fg=('#4a9eff' if self.dark else '#1a6fb0') if is_new
+                       else theme['text_fg'])
+        lbl.pack(side='left', fill='x', expand=True, padx=(2, 2), pady=3)
         for w in (row, lbl):
             w.bind('<Button-1>', lambda e, s=slot: self._on_row_click(s))
             w.bind('<Enter>', lambda e, s=slot: self._on_row_hover(s))
