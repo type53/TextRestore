@@ -121,10 +121,14 @@ STRINGS = {
         'hist_title': '历史记录',
         'btn_hist_save': '＋ 存入历史',
         'btn_hist_clear': '清除选中',
+        'btn_hist_clear_all': '清空全部',
         'hist_saved': '已存入历史记录 ✓',
         'hist_empty_input': '输入为空, 无法存入历史。',
         'hist_deleted': '已删除选中记录。',
         'hist_clear_confirm': '确定删除选中的 {n} 条记录? 此操作不可撤销。',
+        'hist_clear_all_confirm': '确定清空全部历史记录? 此操作不可撤销。',
+        'hist_cleared_all': '已清空全部历史记录。',
+        'hist_no_history': '暂无历史记录。',
         'hist_checked_none': '请先勾选要删除的记录。',
         'hist_cleared': '已删除选中的 {n} 条记录。',
         'hist_delete_confirm': '确定删除选中的历史记录? 此操作不可撤销。',
@@ -227,10 +231,14 @@ STRINGS = {
         'hist_title': 'History',
         'btn_hist_save': '＋ Save',
         'btn_hist_clear': 'Clear selected',
+        'btn_hist_clear_all': 'Clear all',
         'hist_saved': 'Saved to history ✓',
         'hist_empty_input': 'Input is empty, nothing to save.',
         'hist_deleted': 'Entry deleted.',
         'hist_clear_confirm': 'Delete the {n} selected entries? This cannot be undone.',
+        'hist_clear_all_confirm': 'Clear all history? This cannot be undone.',
+        'hist_cleared_all': 'All history cleared.',
+        'hist_no_history': 'No history yet.',
         'hist_checked_none': 'Tick the entries you want to delete first.',
         'hist_cleared': 'Deleted {n} entries.',
         'hist_delete_confirm': 'Delete the selected history entry? This cannot be undone.',
@@ -1211,6 +1219,9 @@ class App:
         self._syncing = False
         self._map = None          # 最近一次转换的映射信息
         self._last_result = ''
+        self._last_display = ''   # 输出框当前显示的文本
+        self._last_counts = {}
+        self._convert_sig = None  # 上次转换的输入/设置签名 (无变化则跳过)
         self._in_line_starts = [0]
         self._out_line_starts = [0]
         self._switches = []       # 所有 Switch 控件, 主题切换时统一更新
@@ -1457,6 +1468,8 @@ class App:
                                        background='#eafaf1')
 
         # 输出框: 只读, 但允许鼠标选中, Ctrl+C 复制选中, Ctrl+A 全选
+        # takefocus=0: 不参与键盘焦点遍历, 避免输入法候选框被输出框抢走
+        self.output_text.configure(takefocus=0)
         self.output_text.bind('<Key>', self._readonly_block)
 
         # ---- 状态信息 (独占一行) ----
@@ -1568,11 +1581,18 @@ class App:
         self._hist_rows = []          # 每行的控件引用 (悬停/样式用)
         self._hover_slot = None
 
-        # 清除选中: 勾选了列表项后点亮可用
-        self.btn_hist_clear = ttk.Button(sb, text=self.tr('btn_hist_clear'),
+        # 清除选中: 勾选了列表项后点亮可用; 旁边保留"清空全部"
+        clear_row = ttk.Frame(sb, style='Sidebar.TFrame')
+        clear_row.pack(fill='x', pady=(8, 0))
+        self.btn_hist_clear = ttk.Button(clear_row, text=self.tr('btn_hist_clear'),
                                          command=self.clear_selected_history,
                                          state='disabled')
-        self.btn_hist_clear.pack(fill='x', pady=(8, 0))
+        self.btn_hist_clear.pack(side='left', expand=True, fill='x')
+        self.btn_hist_clear_all = ttk.Button(clear_row,
+                                             text=self.tr('btn_hist_clear_all'),
+                                             command=self.clear_all_history)
+        self.btn_hist_clear_all.pack(side='left', expand=True, fill='x',
+                                     padx=(6, 0))
         self._clear_btn_on = False
 
     # ---------- 历史列表 (自绘行: 勾选框 + 预览 + 悬停操作) ----------
@@ -1800,8 +1820,12 @@ class App:
             self.draft = self.input_text.get('1.0', 'end-1c')
 
     def _stash_current(self):
-        """切换槽位前: 草稿槽或未归属内容才存入草稿 (历史条目是副本, 不动草稿)。"""
-        if self._current_slot in (0, None):
+        """切换槽位前: 仅当处于"新记录"槽时把内容存入草稿。
+
+        历史条目只是副本(不动草稿); 槽位为 None (例如删除当前记录后) 时
+        输入框里的内容属于已删除记录, 同样不能覆盖草稿。
+        """
+        if self._current_slot == 0:
             self.draft = self.input_text.get('1.0', 'end-1c')
 
     # ---------- 编辑历史记录 ----------
@@ -1991,6 +2015,16 @@ class App:
             return
         removed = self._delete_indices(list(self._hist_checked))
         self._flash(self.tr('hist_cleared', n=removed))
+
+    def clear_all_history(self):
+        """清空全部历史记录 (需确认; 不影响"新记录"草稿)。"""
+        if not self.history:
+            self._flash(self.tr('hist_no_history'))
+            return
+        if self._ask_confirm(self.tr('hist_clear_all_confirm')) != 'ok':
+            return
+        self._delete_indices(range(len(self.history)))
+        self._flash(self.tr('hist_cleared_all'))
 
     # ---------- 对话框 ----------
     def _ask_confirm(self, msg):
@@ -2808,6 +2842,7 @@ class App:
         self.btn_hist_save.configure(text=self.tr('btn_hist_save'))
         self.btn_hist_save_edit.configure(text=self.tr('hist_save_edit'))
         self.btn_hist_clear.configure(text=self.tr('btn_hist_clear'))
+        self.btn_hist_clear_all.configure(text=self.tr('btn_hist_clear_all'))
         self._refresh_history_list()
 
     def _save_settings(self):
@@ -2960,19 +2995,31 @@ class App:
     def do_convert(self):
         raw = self.input_text.get('1.0', 'end-1c')
         enabled = {k: v.get() for k, v in self.enabled.items()}
-        result, counts, red, green, mapping = convert_text(raw, enabled)
         # 前后缀: 开关关闭则不附加, None 表示无内容
         prefix = self.selected_pf('prefix') if self.include_prefix.get() else ''
         suffix = self.selected_pf('suffix') if self.include_suffix.get() else ''
+        # 输入与设置都没变 -> 直接返回 (键盘修饰键/方向键/输入法控制键
+        # 不应触发任何重绘, 否则中文输入法候选框会来回跳动)
+        sig = (raw, tuple(sorted(enabled.items())), prefix, suffix)
+        if sig == self._convert_sig:
+            self._apply_status()
+            return
+        self._convert_sig = sig
+        result, counts, red, green, mapping = convert_text(raw, enabled)
         display = prefix + result + suffix
         self._map = mapping
         self._last_result = result
-        self._last_display = display
-        self._prefix_len = len(prefix)
         self._in_line_starts = _line_starts(raw)
         self._out_line_starts = _line_starts(display)
-        self.output_text.delete('1.0', 'end')
-        self.output_text.insert('1.0', display)
+        # 内容无变化时不重写输出框: 每次按键都 delete+insert 会让输入法
+        # 候选框在输入/输出框之间跳动, 也白白付出渲染开销。
+        if display != self._last_display:
+            self._last_display = display
+            self._prefix_len = len(prefix)
+            self.output_text.delete('1.0', 'end')
+            self.output_text.insert('1.0', display)
+        else:
+            self._prefix_len = len(prefix)
         # diff 高亮: 输入框飘红, 输出框飘绿 (绿色区间整体后移前缀长度)
         self.input_text.tag_remove('red', '1.0', 'end')
         self.output_text.tag_remove('green', '1.0', 'end')
@@ -2982,12 +3029,8 @@ class App:
         for s, e in green:
             self.output_text.tag_add('green', f'1.0+{s + plen}c', f'1.0+{e + plen}c')
         total = sum(counts.values())
-        if total:
-            parts = ' · '.join(f'{self.tr(f"stat_{k}")} {v}'
-                               for k, v in counts.items() if v)
-            self.status_var.set(self.tr('status_restored', total=total, parts=parts))
-        else:
-            self.status_var.set(self.tr('status_none'))
+        self._last_counts = counts
+        self._apply_status()
         # 输出内容刷新后, 滚动位置对齐到输入框 (键盘翻页等场景)
         self.root.after_idle(self._sync_output_view)
         # 若存在选区, 重新生成联动高亮
@@ -2998,6 +3041,18 @@ class App:
         self._schedule_state_save()
         # 历史记录编辑状态 (点亮"保存编辑"按钮)
         self._update_edit_state()
+
+    def _apply_status(self):
+        """按上次转换的统计刷新状态栏 (不重新转换)。"""
+        counts = self._last_counts
+        total = sum(counts.values())
+        if total:
+            parts = ' · '.join(f'{self.tr(f"stat_{k}")} {v}'
+                               for k, v in counts.items() if v)
+            self.status_var.set(self.tr('status_restored', total=total,
+                                        parts=parts))
+        else:
+            self.status_var.set(self.tr('status_none'))
 
     def _schedule_state_save(self):
         if self._save_after is not None:
@@ -3010,7 +3065,20 @@ class App:
     def _do_state_save(self):
         self._save_after = None
         self._save_settings()
-        self._refresh_history_list()   # 刷新"新记录"槽的预览
+        # 只刷新"新记录"行的预览文字; 不重建整个列表 —
+        # 频繁销毁/重建控件会打断输入法组字窗口的定位, 造成候选框跳动。
+        self._update_new_row_label()
+
+    def _update_new_row_label(self):
+        label = self._history_label(0)
+        for r in self._hist_rows:
+            if r['is_new']:
+                try:
+                    if r['lbl'].cget('text') != label:
+                        r['lbl'].configure(text=label)
+                except tk.TclError:
+                    pass
+                break
 
     def _on_close(self):
         """窗口关闭: 先确认未保存的历史记录修改, 再保存输入状态。"""
