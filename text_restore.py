@@ -1539,6 +1539,9 @@ class App:
             w.bind('<B1-Motion>', self._on_drag)
             w.bind('<ButtonRelease-1>', self._on_selection)
         self.input_text.bind('<Control-a>', self._select_all_in)
+        # Ctrl+S: 新记录 -> 存入历史; 历史记录 -> 保存到当前记录
+        self.input_text.bind('<Control-s>', self.save_shortcut)
+        self.input_text.bind('<Control-S>', self.save_shortcut)
 
         # 填充历史记录列表
         self._refresh_history_list()
@@ -2986,6 +2989,15 @@ class App:
     def _select_all_in(self, event=None):
         self.input_text.tag_add('sel', '1.0', 'end-1c')
         self._mirror_selection(self.input_text)
+        return 'break'
+
+    def save_shortcut(self, event=None):
+        """Ctrl+S: 处于历史记录时保存到该记录, 否则存入历史。"""
+        slot = self._current_slot
+        if slot is None or slot == 0:
+            self.save_to_history()      # 新记录 / 无归属内容 -> 存入历史
+        else:
+            self.save_history_edit()    # 历史记录 -> 保存到当前记录
         return 'break'
 
     # ---------- 事件处理 ----------
