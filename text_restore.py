@@ -79,9 +79,11 @@ STRINGS = {
         'status_copied': '已复制到剪贴板 ✓',
         'status_empty': '输出为空, 没有可复制的内容。',
         'status_pasted': '已粘贴到输入框。',
+        'status_quick_done': '已切到新记录、粘贴剪贴板并复制输出 ✓',
         'status_clip_empty': '剪贴板中没有文本。',
         'btn_copy': '复制结果',
         'btn_paste': '粘贴',
+        'btn_quick': '一键还原',
         'btn_clear': '清空输入',
         'btn_settings': '设置',
         'btn_done': '完成',
@@ -187,9 +189,11 @@ STRINGS = {
         'status_copied': 'Copied to clipboard ✓',
         'status_empty': 'Output is empty, nothing to copy.',
         'status_pasted': 'Pasted into the input box.',
+        'status_quick_done': 'Switched to New record, pasted the clipboard and copied the output ✓',
         'status_clip_empty': 'No text in the clipboard.',
         'btn_copy': 'Copy',
         'btn_paste': 'Paste',
+        'btn_quick': 'One-click',
         'btn_clear': 'Clear',
         'btn_settings': 'Settings',
         'btn_done': 'Done',
@@ -1502,6 +1506,10 @@ class App:
         self.suffix_combo.bind('<<ComboboxSelected>>',
                                lambda e: self._on_pf_selected('suffix'))
         self._switches.extend([sw1, sw2])
+        # 一键流程: 切到新记录 -> 清空 -> 粘贴剪贴板 -> 复制输出
+        self.btn_quick = ttk.Button(pf_row, text=self.tr('btn_quick'),
+                                    command=self.quick_pipeline)
+        self.btn_quick.pack(side='right')
         self._refresh_pf_combos()
 
         # ---- 底部: 复制/粘贴/清空/设置 + 主题 ----
@@ -1924,14 +1932,17 @@ class App:
         self._flash(self.tr('hist_saved'))
 
     def _on_row_click(self, slot):
-        """点击列表行: 静默切换槽位 (新记录 / 历史记录), 不做覆盖询问。"""
+        """点击列表行: 静默切换槽位 (新记录 / 历史记录), 不做覆盖询问。
+
+        返回 True 表示已切换(或本就在该槽), False 表示用户取消了切换。
+        """
         if self._hist_guard:
-            return
+            return False
         if slot > len(self.history) or slot == self._current_slot:
-            return
+            return True
         if not self._confirm_pending_edit():
             self._refresh_history_list()      # 取消: 恢复原样式
-            return
+            return False
         self._stash_current()
         if slot == 0:
             self._load_into_input(self.draft)
@@ -1946,6 +1957,7 @@ class App:
         self._refresh_history_list()
         self._update_edit_state()
         self._flash(msg)
+        return True
 
     def rename_history(self, idx):
         """重命名第 idx 条历史记录 (行内 ✎ 按钮)。"""
@@ -2833,6 +2845,7 @@ class App:
         self.output_label.configure(text=self.tr('output_label'))
         self.btn_copy.configure(text=self.tr('btn_copy'))
         self.btn_paste.configure(text=self.tr('btn_paste'))
+        self.btn_quick.configure(text=self.tr('btn_quick'))
         self.btn_clear.configure(text=self.tr('btn_clear'))
         self.btn_settings.configure(text=self.tr('btn_settings'))
         self.prefix_label.configure(text=self.tr('label_prefix'))
@@ -3113,6 +3126,43 @@ class App:
         self.root.clipboard_clear()
         self.root.clipboard_append(content)
         self._flash(self.tr('status_copied'))
+
+    def quick_pipeline(self):
+        """一键流程: 切换到「新记录」→ 清空 → 粘贴剪贴板 → 复制输出。"""
+        if not self._on_row_click(0):
+            return                      # 在"保存修改"询问处取消, 中止流程
+        if self._current_slot != 0:
+            # 理论上不会发生 (上方已切换), 兜底直接落到草稿槽
+            self._current_slot = 0
+            self._refresh_history_list()
+            self._update_edit_state()
+        # 1) 清空输入 (输出随之清空)
+        self.input_text.delete('1.0', 'end')
+        self.input_text.mark_set('insert', '1.0')
+        self.do_convert()
+        # 2) 粘贴剪贴板
+        try:
+            text = self.root.clipboard_get()
+        except tk.TclError:
+            text = ''
+        if not text:
+            self._flash(self.tr('status_clip_empty'))
+            self.input_text.focus_set()
+            return
+        self.input_text.insert('1.0', text)
+        self.input_text.mark_set('insert', 'end-1c')
+        self.input_text.see('end-1c')
+        self.do_convert()
+        # 3) 复制输出
+        out = self.output_text.get('1.0', 'end-1c')
+        if not out:
+            self._flash(self.tr('status_empty'))
+            self.input_text.focus_set()
+            return
+        self.root.clipboard_clear()
+        self.root.clipboard_append(out)
+        self.input_text.focus_set()
+        self._flash(self.tr('status_quick_done'))
 
     def paste_input(self):
         """把剪贴板文本粘贴到输入框: 空则直接填入, 否则另起一行追加。"""
