@@ -125,6 +125,7 @@ STRINGS = {
         'btn_hist_clear': '清除选中',
         'btn_hist_clear_all': '清空全部',
         'hist_saved': '已存入历史记录 ✓',
+        'hist_saved_draft': '已存入历史记录，新记录已清空 ✓',
         'hist_empty_input': '输入为空, 无法存入历史。',
         'hist_deleted': '已删除选中记录。',
         'hist_clear_confirm': '确定删除选中的 {n} 条记录? 此操作不可撤销。',
@@ -237,6 +238,7 @@ STRINGS = {
         'btn_hist_clear': 'Clear selected',
         'btn_hist_clear_all': 'Clear all',
         'hist_saved': 'Saved to history ✓',
+        'hist_saved_draft': 'Saved to history; the New record box was cleared ✓',
         'hist_empty_input': 'Input is empty, nothing to save.',
         'hist_deleted': 'Entry deleted.',
         'hist_clear_confirm': 'Delete the {n} selected entries? This cannot be undone.',
@@ -1922,13 +1924,29 @@ class App:
         return True
 
     def save_to_history(self):
-        """把当前输入存入历史记录。"""
+        """把当前输入存入历史记录。
+
+        若当前停留在「新记录」槽, 入库后清空该槽的输入与草稿 (仍停在草稿槽),
+        因为内容已经保存到历史记录里了。
+        """
         text = self.input_text.get('1.0', 'end-1c')
         if not text.strip():
             self._flash(self.tr('hist_empty_input'))
             return
+        from_draft = (self._current_slot == 0)
         self._sync_draft()
-        self._add_history(text, select=True)
+        self._add_history(text, select=not from_draft)
+        if from_draft:
+            # 草稿已入库 -> 清空「新记录」并留在该槽
+            self._current_slot = 0
+            self.draft = ''
+            self.input_text.delete('1.0', 'end')
+            self.do_convert()
+            self._refresh_history_list()
+            self._update_edit_state()
+            self._save_settings()
+            self._flash(self.tr('hist_saved_draft'))
+            return
         self._flash(self.tr('hist_saved'))
 
     def _on_row_click(self, slot):
