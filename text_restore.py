@@ -91,6 +91,9 @@ STRINGS = {
         'theme_light': '浅色主题',
         'label_prefix': '前缀:',
         'label_suffix': '后缀:',
+        'find_label': '查找:',
+        'find_stat': '输入 {a} · 输出 {b}',
+        'find_none': '无匹配',
         'legend_red': '■ 输入中被替换的字符',
         'legend_green': '■ 输出中还原后的字符',
         'nav_options': '还原选项',
@@ -202,6 +205,9 @@ STRINGS = {
         'theme_light': 'Light',
         'label_prefix': 'Prefix:',
         'label_suffix': 'Suffix:',
+        'find_label': 'Find:',
+        'find_stat': 'in {a} · out {b}',
+        'find_none': 'no match',
         'legend_red': '■ Replaced in input',
         'legend_green': '■ Restored in output',
         'nav_options': 'Options',
@@ -839,6 +845,7 @@ THEMES = {
         'green_fg': '#1e8449', 'green_bg': '#eafaf1',
         'status_fg': '#1a6fb0',
         'hint_fg': '#667777',
+        'find_bg': '#ffe58f', 'find_fg': '#000000',
         'border': '#c8c8c8',
         'btn_bg': '#e9e9e9', 'btn_active': '#dcdcdc', 'btn_pressed': '#d0d0d0',
         'accent': '#2f6fe0', 'accent_active': '#245bbd',
@@ -857,6 +864,7 @@ THEMES = {
         'green_fg': '#7ee787', 'green_bg': '#1f3d2b',
         'status_fg': '#79b8ff',
         'hint_fg': '#9d9d9d',
+        'find_bg': '#7a5c00', 'find_fg': '#ffffff',
         'border': '#3c3c3c',
         'btn_bg': '#333333', 'btn_active': '#454545', 'btn_pressed': '#2a2a2a',
         'accent': '#3b82f6', 'accent_active': '#2f6fe0',
@@ -1438,9 +1446,22 @@ class App:
                                       foreground='#1e8449')
         self.legend_green.pack(side='left')
 
-        # ---- 输入区 ----
-        self.input_label = ttk.Label(content, text=self.tr('input_label'))
-        self.input_label.grid(row=2, column=0, sticky='w', pady=(8, 2))
+        # ---- 输入区标题行: 输入框 + 查找 ----
+        in_head = ttk.Frame(content)
+        in_head.grid(row=2, column=0, sticky='ew', pady=(8, 2))
+        self.input_label = ttk.Label(in_head, text=self.tr('input_label'))
+        self.input_label.pack(side='left')
+        self.find_label = ttk.Label(in_head, text=self.tr('find_label'))
+        self.find_label.pack(side='left', padx=(16, 4))
+        self.find_var = tk.StringVar()
+        self.find_entry = ttk.Entry(in_head, textvariable=self.find_var,
+                                    width=18)
+        self.find_entry.pack(side='left')
+        self.find_entry.bind('<Escape>', lambda e: self.clear_find())
+        self.find_entry.bind('<Return>', lambda e: self._find_jump_first())
+        self.find_var.trace_add('write', lambda *a: self._apply_find_highlight())
+        self.find_stat = ttk.Label(in_head, text='')
+        self.find_stat.pack(side='left', padx=(8, 0))
         in_frame = ttk.Frame(content)
         in_frame.grid(row=3, column=0, sticky='nsew')
         self.input_text = tk.Text(in_frame, height=8, font=TEXT_FONT,
@@ -2353,6 +2374,13 @@ class App:
         # 图例颜色跟随输入/输出的替换字符前景色
         self.legend_red.configure(foreground=self._effective_color('input', 'diff_fg'))
         self.legend_green.configure(foreground=self._effective_color('output', 'diff_fg'))
+        # 查找高亮配色 (两框一致, 盖在 diff/联动标记之上)
+        theme = THEMES['dark' if self.dark else 'light']
+        for w in (self.input_text, self.output_text):
+            w.tag_configure('find', background=theme['find_bg'],
+                            foreground=theme['find_fg'])
+            w.tag_raise('find')
+        self._apply_find_highlight()
 
     def _font_list_cached(self):
         if self._font_list is None:
@@ -2860,6 +2888,8 @@ class App:
         self.legend_red.configure(text=self.tr('legend_red'))
         self.legend_green.configure(text=self.tr('legend_green'))
         self.input_label.configure(text=self.tr('input_label'))
+        self.find_label.configure(text=self.tr('find_label'))
+        self._apply_find_highlight()    # 语言切换后刷新匹配数文案
         self.output_label.configure(text=self.tr('output_label'))
         self.btn_copy.configure(text=self.tr('btn_copy'))
         self.btn_paste.configure(text=self.tr('btn_paste'))
@@ -3031,6 +3061,59 @@ class App:
             self.save_history_edit()    # 历史记录 -> 保存到当前记录
         return 'break'
 
+    # ---------- 查找高亮 ----------
+    def _tag_matches(self, widget, query, limit=500):
+        """给 widget 中所有匹配项打 find 标记, 返回匹配数 (含上限)。"""
+        count = 0
+        try:
+            pos = widget.search(query, '1.0', stopindex='end', nocase=True)
+            while pos and count < limit:
+                end = f'{pos}+{len(query)}c'
+                widget.tag_add('find', pos, end)
+                count += 1
+                pos = widget.search(query, end, stopindex='end', nocase=True)
+        except tk.TclError:
+            return count
+        return count
+
+    def _apply_find_highlight(self, event=None):
+        """按查找框内容高亮输入/输出框中的匹配项。"""
+        query = self.find_var.get() if hasattr(self, 'find_var') else ''
+        for w in (self.input_text, self.output_text):
+            w.tag_remove('find', '1.0', 'end')
+        if not query:
+            self.find_stat.configure(text='')
+            return
+        a = self._tag_matches(self.input_text, query)
+        b = self._tag_matches(self.output_text, query)
+        if a or b:
+            self.find_stat.configure(text=self.tr('find_stat', a=a, b=b))
+        else:
+            self.find_stat.configure(text=self.tr('find_none'))
+
+    def clear_find(self):
+        """清空查找框并移除高亮。"""
+        self.find_var.set('')
+        self.find_entry.focus_set()
+        return 'break'
+
+    def _find_jump_first(self):
+        """回车: 跳到输入框中的第一处匹配 (有则选中并滚动可见)。"""
+        query = self.find_var.get()
+        if not query:
+            return 'break'
+        try:
+            pos = self.input_text.search(query, '1.0', stopindex='end',
+                                         nocase=True)
+        except tk.TclError:
+            return 'break'
+        if pos:
+            self.input_text.tag_add('sel', pos, f'{pos}+{len(query)}c')
+            self.input_text.mark_set('insert', pos)
+            self.input_text.see(pos)
+            self.input_text.focus_set()
+        return 'break'
+
     # ---------- 事件处理 ----------
     def _on_change(self, event=None):
         self.do_convert()
@@ -3084,6 +3167,9 @@ class App:
         self._schedule_state_save()
         # 历史记录编辑状态 (点亮"保存编辑"按钮)
         self._update_edit_state()
+        # 文本变了: 重新计算查找高亮
+        if getattr(self, 'find_var', None) is not None and self.find_var.get():
+            self._apply_find_highlight()
 
     def _apply_status(self):
         """按上次转换的统计刷新状态栏 (不重新转换)。"""
