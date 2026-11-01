@@ -1471,7 +1471,7 @@ class App:
         self.find_entry.pack(side='left', fill='x', expand=True)
         self.find_entry.bind('<Escape>', lambda e: self.clear_find())
         self.find_entry.bind('<Return>', lambda e: self._find_jump_first())
-        self.find_var.trace_add('write', lambda *a: self._apply_find_highlight())
+        self.find_var.trace_add('write', lambda *a: self._on_find_changed())
         self.replace_label = ttk.Label(in_head, text=self.tr('find_replace_label'))
         self.replace_label.pack(side='left', padx=(10, 4))
         self.replace_var = tk.StringVar()
@@ -1479,12 +1479,16 @@ class App:
                                        width=10)
         self.replace_entry.pack(side='left', fill='x', expand=True)
         self.replace_entry.bind('<Return>', lambda e: self.replace_one())
+        self.replace_var.trace_add('write',
+                                   lambda *a: self._update_replace_state())
+        self._replace_btn_on = None
         self.btn_replace = ttk.Button(in_head, text=self.tr('btn_replace'),
                                       command=self.replace_one)
         self.btn_replace.pack(side='left', padx=(6, 0))
         self.btn_replace_all = ttk.Button(in_head, text=self.tr('btn_replace_all'),
                                           command=self.replace_all)
         self.btn_replace_all.pack(side='left', padx=(4, 0))
+        self._update_replace_state()
         in_frame = ttk.Frame(content)
         in_frame.grid(row=3, column=0, sticky='nsew')
         self.input_text = tk.Text(in_frame, height=8, font=TEXT_FONT,
@@ -3121,6 +3125,27 @@ class App:
         else:
             self.find_stat.configure(text=self.tr('find_none'))
 
+    def _on_find_changed(self):
+        """查找框变化: 刷新高亮与替换按钮状态。"""
+        self._apply_find_highlight()
+        self._update_replace_state()
+
+    def _update_replace_state(self):
+        """查找内容与替换内容一致 (或都为空) 时, 替换按钮置灰不可用。"""
+        same = (self.find_var.get() == self.replace_var.get())
+        on = not same
+        if on == self._replace_btn_on:
+            return
+        self._replace_btn_on = on
+        for b in (getattr(self, 'btn_replace', None),
+                  getattr(self, 'btn_replace_all', None)):
+            if b is None:
+                continue
+            try:
+                b.configure(state='normal' if on else 'disabled')
+            except tk.TclError:
+                pass
+
     def clear_find(self):
         """清空查找框并移除高亮。"""
         self.find_var.set('')
@@ -3159,6 +3184,8 @@ class App:
             self._flash(self.tr('find_need_query'))
             return 0
         new = self.replace_var.get()
+        if new == old:
+            return 0        # 内容一致: 无意义操作 (按钮已置灰)
         w = self.input_text
         n = 0
         # 1) 选区正好是查找内容 -> 直接替换
@@ -3197,6 +3224,8 @@ class App:
             self._flash(self.tr('find_need_query'))
             return 0
         new = self.replace_var.get()
+        if new == old:
+            return 0        # 内容一致: 无意义操作 (按钮已置灰)
         w = self.input_text
         count = 0
         # 关闭自动分隔符, 让整批替换合并为一次撤销
