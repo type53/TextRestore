@@ -92,8 +92,14 @@ STRINGS = {
         'label_prefix': '前缀:',
         'label_suffix': '后缀:',
         'find_label': '查找:',
+        'find_replace_label': '替换为:',
+        'btn_replace': '替换',
+        'btn_replace_all': '全部替换',
         'find_stat': '输入 {a} · 输出 {b}',
         'find_none': '无匹配',
+        'find_need_query': '请先在查找框中输入内容。',
+        'replaced_n': '已替换 {n} 处',
+        'replaced_none': '未找到匹配项。',
         'legend_red': '■ 输入中被替换的字符',
         'legend_green': '■ 输出中还原后的字符',
         'nav_options': '还原选项',
@@ -206,8 +212,14 @@ STRINGS = {
         'label_prefix': 'Prefix:',
         'label_suffix': 'Suffix:',
         'find_label': 'Find:',
+        'find_replace_label': 'Replace:',
+        'btn_replace': 'Replace',
+        'btn_replace_all': 'Replace all',
         'find_stat': 'in {a} · out {b}',
         'find_none': 'no match',
+        'find_need_query': 'Enter something to find first.',
+        'replaced_n': 'Replaced {n} occurrence(s)',
+        'replaced_none': 'No matches found.',
         'legend_red': '■ Replaced in input',
         'legend_green': '■ Restored in output',
         'nav_options': 'Options',
@@ -1446,7 +1458,7 @@ class App:
                                       foreground='#1e8449')
         self.legend_green.pack(side='left')
 
-        # ---- 输入区标题行: 输入框 + 查找 ----
+        # ---- 输入区标题行: 输入框 + 查找/替换 ----
         in_head = ttk.Frame(content)
         in_head.grid(row=2, column=0, sticky='ew', pady=(8, 2))
         self.input_label = ttk.Label(in_head, text=self.tr('input_label'))
@@ -1455,13 +1467,24 @@ class App:
         self.find_label.pack(side='left', padx=(16, 4))
         self.find_var = tk.StringVar()
         self.find_entry = ttk.Entry(in_head, textvariable=self.find_var,
-                                    width=18)
-        self.find_entry.pack(side='left')
+                                    width=10)
+        self.find_entry.pack(side='left', fill='x', expand=True)
         self.find_entry.bind('<Escape>', lambda e: self.clear_find())
         self.find_entry.bind('<Return>', lambda e: self._find_jump_first())
         self.find_var.trace_add('write', lambda *a: self._apply_find_highlight())
-        self.find_stat = ttk.Label(in_head, text='')
-        self.find_stat.pack(side='left', padx=(8, 0))
+        self.replace_label = ttk.Label(in_head, text=self.tr('find_replace_label'))
+        self.replace_label.pack(side='left', padx=(10, 4))
+        self.replace_var = tk.StringVar()
+        self.replace_entry = ttk.Entry(in_head, textvariable=self.replace_var,
+                                       width=10)
+        self.replace_entry.pack(side='left', fill='x', expand=True)
+        self.replace_entry.bind('<Return>', lambda e: self.replace_one())
+        self.btn_replace = ttk.Button(in_head, text=self.tr('btn_replace'),
+                                      command=self.replace_one)
+        self.btn_replace.pack(side='left', padx=(6, 0))
+        self.btn_replace_all = ttk.Button(in_head, text=self.tr('btn_replace_all'),
+                                          command=self.replace_all)
+        self.btn_replace_all.pack(side='left', padx=(4, 0))
         in_frame = ttk.Frame(content)
         in_frame.grid(row=3, column=0, sticky='nsew')
         self.input_text = tk.Text(in_frame, height=8, font=TEXT_FONT,
@@ -1499,11 +1522,15 @@ class App:
         self.output_text.configure(takefocus=0)
         self.output_text.bind('<Key>', self._readonly_block)
 
-        # ---- 状态信息 (独占一行) ----
+        # ---- 状态行: 状态信息 (左) + 查找匹配数 (右) ----
+        status_row = ttk.Frame(content)
+        status_row.grid(row=6, column=0, sticky='ew', pady=(10, 0))
         self.status_var = tk.StringVar(value=self.tr('status_ready'))
-        self.status_label = ttk.Label(content, textvariable=self.status_var,
+        self.find_stat = ttk.Label(status_row, text='')       # 先 pack, 优先占位
+        self.find_stat.pack(side='right')
+        self.status_label = ttk.Label(status_row, textvariable=self.status_var,
                                       foreground='#1a6fb0')
-        self.status_label.grid(row=6, column=0, sticky='w', pady=(10, 0))
+        self.status_label.pack(side='left')
 
         # ---- 前后缀: 开关 (是否附加) + 下拉框 (附加哪一条) ----
         pf_row = ttk.Frame(content)
@@ -2889,6 +2916,9 @@ class App:
         self.legend_green.configure(text=self.tr('legend_green'))
         self.input_label.configure(text=self.tr('input_label'))
         self.find_label.configure(text=self.tr('find_label'))
+        self.replace_label.configure(text=self.tr('find_replace_label'))
+        self.btn_replace.configure(text=self.tr('btn_replace'))
+        self.btn_replace_all.configure(text=self.tr('btn_replace_all'))
         self._apply_find_highlight()    # 语言切换后刷新匹配数文案
         self.output_label.configure(text=self.tr('output_label'))
         self.btn_copy.configure(text=self.tr('btn_copy'))
@@ -3113,6 +3143,92 @@ class App:
             self.input_text.see(pos)
             self.input_text.focus_set()
         return 'break'
+
+    # ---------- 替换 ----------
+    def _replace_apply(self, start, length, new):
+        """替换输入框中 [start, start+length) 的内容, 光标移到替换后位置。"""
+        end = f'{start}+{length}c'
+        self.input_text.delete(start, end)
+        self.input_text.insert(start, new)
+        self.input_text.mark_set('insert', f'{start}+{len(new)}c')
+
+    def replace_one(self):
+        """替换一处: 优先替换选区, 否则从插入点向后 (含回绕) 的第一处。"""
+        old = self.find_var.get()
+        if not old:
+            self._flash(self.tr('find_need_query'))
+            return 0
+        new = self.replace_var.get()
+        w = self.input_text
+        n = 0
+        # 1) 选区正好是查找内容 -> 直接替换
+        try:
+            s = w.index('sel.first')
+            e = w.index('sel.last')
+            if w.get(s, e).lower() == old.lower():
+                self._replace_apply(s, len(old), new)
+                n = 1
+        except tk.TclError:
+            n = 0
+        if not n:
+            # 2) 从插入点向后找, 找不到再从头找 (回绕)
+            try:
+                pos = w.search(old, 'insert', stopindex='end', nocase=True)
+                if not pos:
+                    pos = w.search(old, '1.0', stopindex='end', nocase=True)
+            except tk.TclError:
+                pos = None
+            if pos:
+                self._replace_apply(pos, len(old), new)
+                w.see('insert')
+                n = 1
+        self.do_convert()
+        self._apply_find_highlight()
+        if n:
+            self._flash(self.tr('replaced_n', n=1))
+        else:
+            self._flash(self.tr('replaced_none'))
+        return n
+
+    def replace_all(self):
+        """替换输入框中的全部匹配项 (一次撤销步)。"""
+        old = self.find_var.get()
+        if not old:
+            self._flash(self.tr('find_need_query'))
+            return 0
+        new = self.replace_var.get()
+        w = self.input_text
+        count = 0
+        # 关闭自动分隔符, 让整批替换合并为一次撤销
+        try:
+            auto = bool(w.cget('autoseparators'))
+        except tk.TclError:
+            auto = True
+        w.edit_separator()
+        try:
+            w.configure(autoseparators=False)
+            pos = w.search(old, '1.0', stopindex='end', nocase=True)
+            while pos and count < 10000:
+                self._replace_apply(pos, len(old), new)
+                count += 1
+                # 跳过刚插入的内容, 避免替换文本包含查找词时死循环
+                pos = w.search(old, f'{pos}+{len(new)}c', stopindex='end',
+                               nocase=True)
+        except tk.TclError:
+            pass
+        finally:
+            try:
+                w.configure(autoseparators=auto)
+            except tk.TclError:
+                pass
+            w.edit_separator()
+        self.do_convert()
+        self._apply_find_highlight()
+        if count:
+            self._flash(self.tr('replaced_n', n=count))
+        else:
+            self._flash(self.tr('replaced_none'))
+        return count
 
     # ---------- 事件处理 ----------
     def _on_change(self, event=None):
