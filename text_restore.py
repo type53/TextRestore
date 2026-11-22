@@ -1644,6 +1644,9 @@ class App:
             (0, 0), window=self.hist_inner, anchor='nw')
         self.hist_inner.bind('<Configure>', self._on_hist_inner_configure)
         self.hist_canvas.bind('<Configure>', self._on_hist_canvas_configure)
+        # 点击列表空白处 -> 清除多选
+        self.hist_canvas.bind('<Button-1>', self._on_hist_bg_click)
+        self.hist_inner.bind('<Button-1>', self._on_hist_bg_click)
         self._hist_rows = []          # 每行的控件引用 (悬停/样式用)
         self._hover_slot = None
 
@@ -1835,16 +1838,39 @@ class App:
         self._update_clear_btn()
 
     def _select_range(self, a, b, add=False):
-        """Shift 范围选择: 选中 [a, b] 之间的记录 (含两端)。"""
+        """Shift 范围选择: 选中 [a, b] 之间的记录 (含两端)。
+
+        若该范围**已全部选中**则整段取消 (批量清除选择状态);
+        add=True (Ctrl+Shift) 时把该范围并入已有选择。
+        """
         if a is None or b is None:
             return
         lo, hi = min(a, b), max(a, b)
         rng = set(range(lo, hi + 1))
+        sel = {i for i in self._hist_checked if 0 <= i < len(self.history)}
         if add:
-            rng |= self._hist_checked
-        self._hist_checked = {i for i in rng if 0 <= i < len(self.history)}
+            new = sel | rng
+        elif rng and rng <= sel:
+            new = sel - rng          # 已全选 -> 批量取消
+        else:
+            new = rng                # 未全选 -> 覆盖为该范围
+        self._hist_checked = {i for i in new if 0 <= i < len(self.history)}
         self._apply_row_styles()
         self._update_clear_btn()
+
+    def _clear_selection(self):
+        """清空多选状态 (不删除任何记录)。"""
+        if not self._hist_checked:
+            return
+        self._hist_checked = set()
+        self._hist_anchor = None
+        self._apply_row_styles()
+        self._update_clear_btn()
+
+    def _on_hist_bg_click(self, event=None):
+        """点击列表空白处: 批量清除选择状态。"""
+        self._clear_selection()
+        return 'break'
 
     def _on_hist_row_click(self, event, slot):
         """列表行点击: 普通点击切换记录; Ctrl 加选/减选; Shift 范围选择。
