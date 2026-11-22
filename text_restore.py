@@ -1261,6 +1261,7 @@ class App:
         self._save_after = None   # 输入状态防抖保存计时器
         self._hist_guard = False     # 列表事件期间防止重入
         self._hist_checked = set()   # 勾选待删除的历史记录下标
+        self._hist_anchor = None     # Shift 范围选择的锚点 (历史下标)
         self._clear_btn_on = False
         cfg = _load_config()
         # 历史记录 (兼容纯字符串与 {text, ts} 两种格式)
@@ -1686,21 +1687,27 @@ class App:
     def _row_colors(self):
         if self.dark:
             return {'active': '#254a75', 'hover': '#242424',
-                    'base': '#171717', 'glyph': '#b0b0b0'}
+                    'checked': '#22334a', 'base': '#171717',
+                    'glyph': '#b0b0b0'}
         return {'active': '#dce8ff', 'hover': '#e9e9ec',
-                'base': '#f5f5f7', 'glyph': '#6b6b6b'}
+                'checked': '#e3edff', 'base': '#f5f5f7',
+                'glyph': '#6b6b6b'}
 
-    def _row_bg(self, active, hover):
+    def _row_bg(self, active, hover, checked=False):
         c = self._row_colors()
         if active:
             return c['active']
+        if checked:
+            return c['checked']
         return c['hover'] if hover else c['base']
 
     def _make_hist_row(self, slot, text, is_new=False):
         c = self._row_colors()
         theme = THEMES['dark' if self.dark else 'light']
+        idx = None if is_new else (slot - 1)
         active = (slot == self._current_slot)
-        bg = self._row_bg(active, slot == self._hover_slot)
+        checked = (idx is not None and idx in self._hist_checked)
+        bg = self._row_bg(active, slot == self._hover_slot, checked)
         row = tk.Frame(self.hist_inner, bg=bg)
         row.pack(fill='x')
         # 注意: pack 按调用顺序分配空间。右侧按钮/左侧勾选框必须先 pack,
@@ -1724,9 +1731,7 @@ class App:
             spacer = tk.Frame(row, width=18, height=1, bg=bg)
             spacer.pack(side='left', padx=(2, 0))
         else:
-            idx = slot - 1
-            chk = HistCheck(row, checked=(idx in self._hist_checked),
-                            dark=self.dark, bg=bg,
+            chk = HistCheck(row, checked=checked, dark=self.dark, bg=bg,
                             command=lambda i=idx: self._toggle_check(i))
             chk.pack(side='left', padx=(2, 2))
             self._bind_hist_scroll(chk)
@@ -1737,7 +1742,8 @@ class App:
                        else theme['text_fg'])
         lbl.pack(side='left', fill='x', expand=True, padx=(2, 2), pady=3)
         for w in (row, lbl):
-            w.bind('<Button-1>', lambda e, s=slot: self._on_row_click(s))
+            w.bind('<Button-1>',
+                   lambda e, s=slot: self._on_hist_row_click(e, s))
             w.bind('<Enter>', lambda e, s=slot: self._on_row_hover(s))
             w.bind('<Leave>', lambda e, s=slot: self._on_row_leave(s))
             self._bind_hist_scroll(w)
@@ -1758,9 +1764,12 @@ class App:
         for w in inner.winfo_children():
             w.destroy()
         self._hist_rows = []
-        # 丢弃已失效的勾选下标
+        # 丢弃已失效的勾选下标与锚点
         self._hist_checked = {i for i in self._hist_checked
                               if 0 <= i < len(self.history)}
+        if self._hist_anchor is not None and \
+                not (0 <= self._hist_anchor < len(self.history)):
+            self._hist_anchor = None
         self._make_hist_row(0, self._history_label(0), is_new=True)
         for i in range(len(self.history)):
             self._make_hist_row(i + 1, self._history_label(i + 1))
@@ -1799,9 +1808,9 @@ class App:
         for r in self._hist_rows:
             active = (r['slot'] == self._current_slot)
             hover = (r['slot'] == self._hover_slot)
-            bg = self._row_bg(active, hover)
-            show = hover          # 行内操作按钮/勾选框仅在悬停时出现
             checked = (r['idx'] is not None and r['idx'] in self._hist_checked)
+            bg = self._row_bg(active, hover, checked)
+            show = hover          # 行内操作按钮/勾选框仅在悬停时出现
             if bg == r['bg'] and show == r['show'] and checked == r.get('checked'):
                 continue
             r['bg'], r['show'], r['checked'] = bg, show, checked
@@ -1817,12 +1826,51 @@ class App:
                                    visible=show)
 
     def _toggle_check(self, idx):
+        self._hist_anchor = idx
         if idx in self._hist_checked:
             self._hist_checked.discard(idx)
         else:
             self._hist_checked.add(idx)
         self._apply_row_styles()
         self._update_clear_btn()
+
+    def _select_range(self, a, b, add=False):
+        """Shift 范围选择: 选中 [a, b] 之间的记录 (含两端)。"""
+        if a is None or b is None:
+            return
+        lo, hi = min(a, b), max(a, b)
+        rng = set(range(lo, hi + 1))
+        if add:
+            rng |= self._hist_checked
+        self._hist_checked = {i for i in rng if 0 <= i < len(self.history)}
+        self._apply_row_styles()
+        self._update_clear_btn()
+
+    def _on_hist_row_click(self, event, slot):
+        """列表行点击: 普通点击切换记录; Ctrl 加选/减选; Shift 范围选择。
+
+        多选仅用于批量删除, 不改变当前查看的记录。
+        """
+        ctrl = bool(event is not None and (event.state & 0x4))
+        shift = bool(event is not None and (event.state & 0x1))
+        if slot == 0:
+            # 「新记录」行不可勾选, 忽略修饰键, 只做普通切换
+            if not (ctrl or shift):
+                self._on_row_click(0)
+            return 'break'
+        idx = slot - 1
+        if shift:
+            if self._hist_anchor is None:
+                self._toggle_check(idx)
+            else:
+                self._select_range(self._hist_anchor, idx, add=ctrl)
+            return 'break'
+        if ctrl:
+            self._toggle_check(idx)
+            return 'break'
+        self._hist_anchor = idx
+        self._on_row_click(slot)
+        return 'break'
 
     def _update_clear_btn(self):
         on = bool(self._hist_checked)
@@ -1968,8 +2016,10 @@ class App:
                                 'name': ''})
         del self.history[MAX_HISTORY:]
         self._current_slot = 1 if select else None
-        # 新条目插到最前, 已有勾选下标整体后移一位
+        # 新条目插到最前, 已有勾选下标与锚点整体后移一位
         self._hist_checked = {i + 1 for i in self._hist_checked}
+        if self._hist_anchor is not None:
+            self._hist_anchor += 1
         self._refresh_history_list()
         self._save_settings()
         self._update_edit_state()
@@ -2075,6 +2125,7 @@ class App:
                 cur -= 1
         self._current_slot = cur
         self._hist_checked = set()
+        self._hist_anchor = None
         self._hover_slot = None
         self._refresh_history_list()
         self._save_settings()
